@@ -1,0 +1,10 @@
+@import "tailwindcss";
+
+@font-face {
+   font-family: "Doodle";
+   src: url("/doodlez.ttf");
+}
+
+@theme {
+   --font-doodle: "Doodle"
+}
