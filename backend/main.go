@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"doodlz/utils"
+	"github.com/sakshamg567/doodlz/backend/utils"
 
 	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
@@ -26,8 +26,9 @@ type WSMessage struct {
 }
 
 type Point struct {
-	X float64 `json:"x"`
-	Y float64 `json:"y"`
+	X    float64 `json:"x"`
+	Y    float64 `json:"y"`
+	Type string  `json:"type,omitempty"` // Add this field
 }
 
 type Stroke struct {
@@ -43,9 +44,9 @@ func (rm *RoomManager) CreateRoomHandler(c *fiber.Ctx) error {
 		ID:         roomId,
 		Players:    make(map[string]*Player),
 		HostID:     "",
-		Register:   make(chan *Player),
-		Unregister: make(chan *Player),
-		Broadcast:  make(chan []byte),
+		Register:   make(chan *Player, 10), // ✅ Buffered
+		Unregister: make(chan *Player, 10), // ✅ Buffered
+		Broadcast:  make(chan []byte, 100),
 		done:       make(chan struct{}),
 	}
 
@@ -54,6 +55,8 @@ func (rm *RoomManager) CreateRoomHandler(c *fiber.Ctx) error {
 	rm.Unlock()
 
 	go room.Run(rm)
+
+	log.Println("room created : ", roomId)
 
 	return c.JSON(fiber.Map{
 		"roomId": roomId,
@@ -92,6 +95,54 @@ type GameState struct {
 // }
 // r.BroadcastGameStatus()
 // }
+
+func (r *Room) broadcast(msg []byte) {
+	r.Broadcast <- msg
+}
+
+func (r *Room) broadcastExcept(sender *Player, msg []byte) {
+	r.mu.Lock()
+	for _, pl := range r.Players {
+		if pl == sender {
+			continue
+		}
+		select {
+		case pl.send <- msg:
+		default:
+		}
+	}
+	r.mu.Unlock()
+}
+
+func (r *Room) BroadcastWS(t string, d any) {
+	data, err := json.Marshal(d)
+	if err == nil {
+		msg := WSMessage{
+			Type: t,
+			Data: data,
+		}
+
+		if msgBytes, err := json.Marshal(msg); err == nil {
+			r.broadcast(msgBytes)
+		}
+	}
+
+}
+
+func (r *Room) BroadcastWSExcept(s *Player, t string, d any) {
+
+	data, err := json.Marshal(d)
+	if err == nil {
+		msg := WSMessage{
+			Type: t,
+			Data: data,
+		}
+
+		if msgBytes, err := json.Marshal(msg); err == nil {
+			r.broadcastExcept(s, msgBytes)
+		}
+	}
+}
 
 func (p *Player) cleanup() {
 	p.once.Do(func() {
@@ -135,32 +186,32 @@ func (r *Room) Run(rm *RoomManager) {
 
 	for {
 		select {
+
 		case player := <-r.Register:
+			log.Printf("🔄 Registering player %s", player.ID)
 			r.mu.Lock()
 			r.Players[player.ID] = player
-
-			go r.sendGameState(player)
-
-			// Broadcast player joined
-			joinedMsg := WSMessage{
-				Type: "user_joined",
-				Data: json.RawMessage([]byte(fmt.Sprintf(`{"playerId": "%s"}`, player.ID))),
-			}
-
-			if msgBytes, err := json.Marshal(joinedMsg); err == nil {
-				r.Broadcast <- msgBytes
-			}
-
-			log.Printf("Player %s joined room %s", player.ID, r.ID)
 			r.mu.Unlock()
+			log.Printf("✅ Player %s registered, about to broadcast join", player.ID)
+
+			joinedmsg := WSMessage{
+				Type: "user_joined",
+				Data: json.RawMessage([]byte(fmt.Sprintf(`{"playerid": "%s"}`, player.ID))),
+			}
+
+			if msgbytes, err := json.Marshal(joinedmsg); err == nil {
+				r.Broadcast <- msgbytes
+			}
+
+			log.Printf("📡 Sent join broadcast for player %s", player.ID)
 
 		case player := <-r.Unregister:
 			r.mu.Lock()
 			if _, exists := r.Players[player.ID]; exists {
 				delete(r.Players, player.ID)
-				log.Printf("Player %s left room %s", player.ID, r.ID)
+				log.Printf("player %s left room %s", player.ID, r.ID)
 
-				// Clean up empty room
+				// clean up empty room
 				if len(r.Players) == 0 {
 					r.mu.Unlock()
 					rm.Lock()
@@ -173,17 +224,14 @@ func (r *Room) Run(rm *RoomManager) {
 			r.mu.Unlock()
 
 		case msg := <-r.Broadcast:
+			log.Printf("Room %s - Broadcasting message to %d players: %s", r.ID, len(r.Players), string(msg))
 			r.mu.RLock()
-			for _, p := range r.Players {
+			for playerID, p := range r.Players {
 				select {
 				case p.send <- msg:
+					log.Printf("Room %s - Message sent to player %s", r.ID, playerID)
 				case <-p.ctx.Done():
-					// Player disconnected, skip
-				default:
-					// Channel full, player likely disconnected
-					go func(player *Player) {
-						r.Unregister <- player
-					}(p)
+					log.Printf("Room %s - Player %s context done, skipping", r.ID, playerID)
 				}
 			}
 			r.mu.RUnlock()
@@ -193,6 +241,10 @@ func (r *Room) Run(rm *RoomManager) {
 
 func (p *Player) readPump(r *Room) {
 	defer func() {
+		if recover := recover(); recover != nil {
+			log.Printf("Player %s readPump panic: %v", p.ID, recover)
+		}
+		log.Printf("Player %s readPump exiting", p.ID)
 		p.cleanup()
 		r.Unregister <- p
 	}()
@@ -210,12 +262,16 @@ func (p *Player) readPump(r *Room) {
 
 			var wsMsg WSMessage
 			if err := json.Unmarshal(msg, &wsMsg); err != nil {
-				log.Println("Invalid WS message:", err)
+				log.Printf("Invalid WS message from player %s: %v, raw message: %s", p.ID, err, string(msg))
 				continue
 			}
 
+			// Add comprehensive logging
+			log.Printf("Player %s - Received message type: %s, raw data: %s", p.ID, wsMsg.Type, string(wsMsg.Data))
+
 			switch wsMsg.Type {
 			case "start_game":
+				log.Printf("Player %s - Processing start_game", p.ID)
 				r.mu.Lock()
 				if r.Game == nil || r.Game.State == "waiting" {
 					// r.StartGame()
@@ -223,54 +279,65 @@ func (p *Player) readPump(r *Room) {
 				r.mu.Unlock()
 
 			case "guess":
+				log.Printf("Player %s - Processing guess", p.ID)
 				var payload struct {
 					Guess string `json:"guess"`
 				}
 				if err := json.Unmarshal(wsMsg.Data, &payload); err != nil {
-					log.Println("Invalid guess payload:", err)
+					log.Printf("Player %s - Invalid guess payload: %v", p.ID, err)
 					continue
 				}
 				// r.handleGuess(p, payload.Guess)
-			case "stroke":
 
+			case "draw_point":
+				log.Println("broadcasting back point")
+				// TODO: Create a helper function, to broadcast to room, except sender
+
+				r.BroadcastWSExcept(p, "draw_point", wsMsg.Data)
+
+			case "stroke":
+				log.Printf("Player %s - Processing stroke", p.ID)
 				var StrokeData Stroke
 
 				if err := json.Unmarshal(wsMsg.Data, &StrokeData); err != nil {
-					log.Println("Invalid stroke data : ", err)
+					log.Printf("Player %s - Invalid stroke data: %v, data: %s", p.ID, err, string(wsMsg.Data))
+					continue
 				}
 
-				r.Strokes = append(r.Strokes, StrokeData)
+				log.Printf("Player %s - Stroke parsed successfully: %+v", p.ID, StrokeData)
 
-				fmt.Println("STROKE :", StrokeData)
+				r.mu.Lock()
+				r.Strokes = append(r.Strokes, StrokeData)
+				r.mu.Unlock()
+
+				// Broadcast stroke to other clients
+
+				log.Printf("Player %s - Broadcasting stroke to room %s", p.ID, r.ID)
+				r.BroadcastWSExcept(p, "stroke", StrokeData)
+
+			case "test":
+				log.Printf("Player %s - Processing test message", p.ID)
+				r.broadcast(msg)
+
 			case "undo":
 				r.mu.Lock()
 				if len(r.Strokes) > 0 {
 					r.Strokes = r.Strokes[:len(r.Strokes)-1]
 				}
-
-				undoMsg := WSMessage{
-					Type: "undo",
-					Data: json.RawMessage(fmt.Sprintf(`{"strokes": %s}`, marshalHelper(r.Strokes))),
-				}
-
 				r.mu.Unlock()
-				if msgBytes, err := json.Marshal(undoMsg); err == nil {
-					r.Broadcast <- msgBytes
-				}
 
-			case "clear":
-				r.mu.Lock()
-				r.Strokes = []Stroke{}
-				r.mu.Unlock()
-				r.Broadcast <- msg
+				r.BroadcastWS("undo", `{}`)
 			default:
-				r.Broadcast <- msg
+				log.Printf("Player %s - Processing default case for type: %s", p.ID, wsMsg.Type)
+				r.broadcast(msg)
 			}
+
+			log.Printf("Player %s - Finished processing message type: %s", p.ID, wsMsg.Type)
 		}
 	}
 }
 
-func marshalHelper(v interface{}) string {
+func marshalHelper(v any) string {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return "[]"
@@ -296,6 +363,8 @@ func (p *Player) writePump(r *Room) {
 				p.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
+
+			log.Printf("Player %s - Sending message: %s", p.ID, string(msg))
 
 			if err := p.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 				log.Printf("WriteMessage error for player %s: %v", p.ID, err)
