@@ -45,16 +45,22 @@ const Game = ({ roomId }: { roomId: string }) => {
          case "draw_point":
             drawPoint(ctxRef, message.data)
             break
-         // case "stroke":
-
+         case "stroke": {
+            const newStroke: Stroke = message.data
+            setAllStrokes((prev) => [...prev, newStroke])
+            break
+         }
          case "clear":
             clearCanvas(canvasRef, ctxRef)
             setAllStrokes([]) // Clear stroke history
             break
          case "undo": {
-            const updatedStrokes: [Stroke] = message.data.strokes || []
-            setAllStrokes(updatedStrokes)
-            replayAllStrokes(updatedStrokes)
+            setAllStrokes(prev => {
+               if (prev.length === 0) return prev
+               const updated = prev.slice(0, -1)
+               replayAllStrokes(updated)
+               return updated
+            })
             break
          }
          case "user_joined":
