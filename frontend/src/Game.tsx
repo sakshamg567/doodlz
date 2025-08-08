@@ -85,7 +85,7 @@ const Game = ({ roomId }: { roomId: string }) => {
       setCurrentStroke([point])
 
       ctxRef.current?.beginPath()
-      ctxRef.current?.moveTo(offsetX, offsetY)
+      // ctxRef.current?.moveTo(offsetX, offsetY)
 
       sendPoint(socketRef, point)
    }
