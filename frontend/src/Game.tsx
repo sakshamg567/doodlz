@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { use, useEffect, useRef, useState } from "react"
 import { type WSMessage, type Stroke, type Point } from "./types/types"
 import { sendPoint, drawPoint, getTouchPos, clearAll, clearCanvas } from "./core"
 
@@ -7,7 +7,7 @@ const Game = ({ roomId }: { roomId: string }) => {
    const ctxRef = useRef<CanvasRenderingContext2D | null>(null)
    const socketRef = useRef<WebSocket | null>(null)
    const drawing = useRef(false)
-   const [connectedUsers, setConnectedUsers] = useState<string[]>([])
+   const [connectedUsers, setConnectedUsers] = useState<Array<{ playerId: string, points: number, name: string }>>([])
    const [allStrokes, setAllStrokes] = useState<Stroke[]>([])
    const [currentStroke, setCurrentStroke] = useState<Point[]>([])
    const lastSentTime = useRef(0)
@@ -41,6 +41,12 @@ const Game = ({ roomId }: { roomId: string }) => {
 
    const handleSocketMessage = (event: MessageEvent) => {
       const message: WSMessage = JSON.parse(event.data)
+
+
+      // 
+      console.log("message : ", message);
+
+
       switch (message.type) {
          case "draw_point":
             drawPoint(ctxRef, message.data)
@@ -63,9 +69,11 @@ const Game = ({ roomId }: { roomId: string }) => {
             })
             break
          }
-         case "user_joined":
-            setConnectedUsers(prev => [...prev, message.data.userId])
+         case "user_joined": {
+            const users = Object.values(message.data)
+            setConnectedUsers(users)
             break
+         }
          case "user_left":
             setConnectedUsers(prev => prev.filter(id => id !== message.data.userId))
             break
