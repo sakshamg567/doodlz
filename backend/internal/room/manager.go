@@ -2,10 +2,10 @@ package room
 
 import (
 	"encoding/json"
-	"log"
 	"sync"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/sakshamg567/doodlz/backend/logger"
 	"github.com/sakshamg567/doodlz/backend/pkg/utils"
 )
 
@@ -39,7 +39,7 @@ func (rm *RoomManager) CreateRoomHandler(c *fiber.Ctx) error {
 
 	go room.Run(rm)
 
-	log.Println("room created : ", roomId)
+	logger.Info("room created : ", roomId)
 
 	return c.JSON(fiber.Map{
 		"roomId": roomId,

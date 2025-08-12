@@ -2,21 +2,28 @@ package room
 
 import (
 	"encoding/json"
-	"fmt"
 	"sync"
+	"time"
+
+	"github.com/sakshamg567/doodlz/backend/logger"
 )
 
 type Room struct {
-	ID         string             `json:"roomId"`
-	Players    map[string]*Player `json:"players"`
-	HostID     string             `json:"hostId"`
-	Register   chan *Player       `json:"-"`
-	Unregister chan *Player       `json:"-"`
-	Broadcast  chan []byte        `json:"-"`
-	done       chan struct{}      `json:"-"`
-	Mu         sync.RWMutex       `json:"-"`
-	Game       *GameState         `json:"-"`
-	Strokes    []Stroke           `json:"strokes"`
+	ID         string
+	Players    map[string]*Player
+	Sessions   map[string]*PlayerSession
+	HostID     string
+	Register   chan *Player
+	Unregister chan *Player
+	Broadcast  chan []byte
+	done       chan struct{}
+	Mu         sync.RWMutex
+	Game       *GameState
+	Strokes    []Stroke
+
+	//internal
+	timerTicker *time.Ticker
+	stopTimer   chan struct{}
 }
 
 func (r *Room) broadcast(msg []byte) {
@@ -45,8 +52,8 @@ func (r *Room) BroadcastWS(t string, d any) {
 			Data: data,
 		}
 
-		if msgBytes, err := json.Marshal(msg); err == nil {
-			r.broadcast(msgBytes)
+		if payload, err := json.Marshal(msg); err == nil {
+			r.broadcast(payload)
 		}
 	}
 
@@ -61,28 +68,89 @@ func (r *Room) BroadcastWSExcept(s *Player, t string, d any) {
 			Data: data,
 		}
 
-		if msgBytes, err := json.Marshal(msg); err == nil {
-			r.broadcastExcept(s, msgBytes)
+		if payload, err := json.Marshal(msg); err == nil {
+			r.broadcastExcept(s, payload)
 		}
 	}
 }
 
-func (r *Room) sendGameState(p *Player) {
-	r.Mu.Lock()
+func (r *Room) SendGameState(p *Player) {
+	r.Mu.RLock()
+	defer r.Mu.RUnlock()
 
-	strokeData, err := json.Marshal(r.Strokes)
+	// copy current strokes
+	strokes := make([]Stroke, len(r.Strokes))
+	copy(strokes, r.Strokes)
 
-	gameState := WSMessage{
-		Type: "game_state",
-		Data: json.RawMessage([]byte(fmt.Sprintf(`{"strokes": %s}`, string(strokeData)))),
+	// get player summary
+	players := make([]PlayerSummary, 0, len(r.Players))
+	for _, v := range r.Players {
+		players = append(players, PlayerSummary{
+			ID:     v.ID,
+			Points: v.Points,
+			Name:   v.Name,
+		})
 	}
-	r.Mu.Unlock()
 
-	if msgBytes, err := json.Marshal(gameState); err == nil {
-		select {
-		case p.send <- msgBytes:
-		default:
+	hostID := r.HostID
+	roomID := r.ID
+
+	// copy current game state or create default
+	var game *GameState
+	if r.Game != nil {
+		g := *r.Game
+		game = &g
+	} else {
+		game = &GameState{
+			Phase:          GamePhaseLobby,
+			MaxRounds:      0,
+			Round:          3,
+			DrawerID:       "",
+			WordMask:       "",
+			WordLen:        "",
+			StartedAtUnix:  0,
+			EndsAtUnix:     0,
+			GuessedPlayers: make(map[string]bool),
 		}
+	}
+
+	snapshot := RoomSnapshot{
+		RoomID:  roomID,
+		HostID:  hostID,
+		Players: players,
+		Strokes: strokes,
+		Game:    game,
+	}
+
+	r.sendWSMessageToPlayer(p, TypeGameState, snapshot)
+
+}
+
+func (r *Room) sendWSMessageToPlayer(p *Player, msgType string, data any) {
+	logger.Info("Sending %s to player: %s", msgType, p.ID)
+
+	payload, err := json.Marshal(data)
+	if err != nil {
+		logger.Error("Failed to marshal data for player %s: %v", p.ID, err)
+		return
+	}
+
+	wsMsg := WSMessage{
+		Type: msgType,
+		Data: payload,
+	}
+
+	msgBytes, err := json.Marshal(wsMsg)
+	if err != nil {
+		logger.Error("Failed to marshal WSMessage for player %s: %v", p.ID, err)
+		return
+	}
+
+	select {
+	case p.send <- msgBytes:
+		logger.Info("Successfully queued message for player: %s", p.ID)
+	default:
+		logger.Error("Player %s send channel is full or closed", p.ID)
 	}
 }
 
@@ -97,9 +165,20 @@ func (r *Room) Run(rm *RoomManager) {
 			r.Players[player.ID] = player
 			r.Mu.Unlock()
 
+			r.SendGameState(player)
+
+			r.Mu.RLock()
+			players := r.Players
+			r.Mu.RUnlock()
+
+			payload, err := json.Marshal(players)
+			if err != nil {
+				logger.Error("player struct marshal error")
+			}
+
 			joinedmsg := WSMessage{
-				Type: "user_joined",
-				Data: json.RawMessage([]byte(fmt.Sprintf(`{"playerid": "%s"}`, player.ID))),
+				Type: TypeUserJoined,
+				Data: payload,
 			}
 
 			if msgbytes, err := json.Marshal(joinedmsg); err == nil {
@@ -133,5 +212,4 @@ func (r *Room) Run(rm *RoomManager) {
 			r.Mu.RUnlock()
 		}
 	}
-
 }

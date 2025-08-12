@@ -2,13 +2,13 @@ package main
 
 import (
 	"encoding/json"
-	"log"
 
 	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 
 	"github.com/sakshamg567/doodlz/backend/internal/room"
+	"github.com/sakshamg567/doodlz/backend/logger"
 )
 
 func main() {
@@ -36,6 +36,7 @@ func main() {
 
 		pl := room.NewPlayer(playerID, c)
 		r.Register <- pl
+
 		go pl.ReadPump(r)
 		pl.WritePump()
 	}))
@@ -74,6 +75,6 @@ func main() {
 
 	app.Get("/", func(c *fiber.Ctx) error { return c.SendString("ok") })
 
-	log.Println("Server :3000")
+	logger.Info("Server :3000")
 	_ = app.Listen(":3000")
 }
