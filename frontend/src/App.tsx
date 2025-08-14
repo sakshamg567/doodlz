@@ -1,15 +1,18 @@
 import axios from 'axios';
 import { useState, useEffect } from 'react';
 import Game from './Game';
+import { getOrCreateGuestId } from './core/lib/guesId';
 
 export default function App() {
   const [selectedOption, setSelectedOption] = useState(0);
   const [roomId, setRoomId] = useState("");
-
+  const [userId, setUserId] = useState("");
   const options = ['Get Doodlin\'', 'Spin up your universe'];
 
   // Check for roomId in URL on component mount
   useEffect(() => {
+    const id = getOrCreateGuestId();
+    setUserId(id);
     const urlParams = new URLSearchParams(window.location.search);
     const urlRoomId = urlParams.get('roomId');
 
@@ -20,7 +23,9 @@ export default function App() {
 
   const handleCreateRoom = async () => {
     try {
-      const res = await axios.post('http://localhost:3000/room/create');
+      const res = await axios.post('http://localhost:3000/room/create', {
+        hostId: userId
+      });
       const newRoomId = res.data.roomId;
       setRoomId(newRoomId);
       console.log(newRoomId);

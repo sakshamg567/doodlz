@@ -17,4 +17,8 @@ export type Point = {
    y: number;
 }
 
-
+export type Player = {
+   ID: string;
+   Name: string;
+   Points: number
+}
