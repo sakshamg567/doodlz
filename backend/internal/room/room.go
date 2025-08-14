@@ -59,6 +59,17 @@ func (r *Room) BroadcastWS(t string, d any) {
 
 }
 
+func (r *Room) isHost(p *Player) bool {
+	return p != nil && p.ID == r.HostID
+}
+
+func (r *Room) BroadcastPoint(s *Player, t string, d any) {
+	if !r.isHost(s) {
+		return
+	}
+	r.BroadcastWSExcept(s, t, d)
+}
+
 func (r *Room) BroadcastWSExcept(s *Player, t string, d any) {
 
 	data, err := json.Marshal(d)

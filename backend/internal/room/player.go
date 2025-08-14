@@ -117,6 +117,10 @@ func (p *Player) ReadPump(r *Room) {
 				logger.Info("Player %s - Processing test message", p.ID)
 				r.broadcast(msg)
 
+			case "clear":
+				r.Strokes = make([]Stroke, 0)
+				r.broadcast(msg)
+
 			case "undo":
 				r.Mu.Lock()
 				if len(r.Strokes) > 0 {

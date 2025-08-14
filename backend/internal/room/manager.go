@@ -5,7 +5,6 @@ import (
 	"sync"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/sakshamg567/doodlz/backend/logger"
 	"github.com/sakshamg567/doodlz/backend/pkg/utils"
 )
 
@@ -21,12 +20,20 @@ func NewRoomManager() *RoomManager {
 }
 
 func (rm *RoomManager) CreateRoomHandler(c *fiber.Ctx) error {
+	reqBody := c.Body()
+
+	var body struct {
+		HostId string `json:"hostId"`
+	}
+
+	json.Unmarshal(reqBody, &body)
+
 	roomId := utils.GenShortID()
 
 	room := &Room{
 		ID:         roomId,
 		Players:    make(map[string]*Player),
-		HostID:     "",
+		HostID:     body.HostId,
 		Register:   make(chan *Player, 10), // ✅ Buffered
 		Unregister: make(chan *Player, 10), // ✅ Buffered
 		Broadcast:  make(chan []byte, 100),
@@ -38,8 +45,6 @@ func (rm *RoomManager) CreateRoomHandler(c *fiber.Ctx) error {
 	rm.Unlock()
 
 	go room.Run(rm)
-
-	logger.Info("room created : ", roomId)
 
 	return c.JSON(fiber.Map{
 		"roomId": roomId,

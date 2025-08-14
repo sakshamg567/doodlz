@@ -75,6 +75,7 @@ func main() {
 
 	app.Get("/", func(c *fiber.Ctx) error { return c.SendString("ok") })
 
+	logger.EnableLogging(true)
 	logger.Info("Server :3000")
 	_ = app.Listen(":3000")
 }
