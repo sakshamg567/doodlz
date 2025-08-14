@@ -78,7 +78,7 @@ const Game = ({ roomId }: { roomId: string }) => {
             setConnectedUsers(prev => prev.filter(id => id !== message.data.userId))
             break
          case "game_state":
-            replayAllStrokes(message.data.strokes || [])
+            replayAllStrokesWithDelay(message.data.strokes || [])
             setAllStrokes(message.data.strokes || [])
             break
       }
@@ -160,6 +160,37 @@ const Game = ({ roomId }: { roomId: string }) => {
          })
          ctx.stroke()
       })
+   }
+
+   const replayAllStrokesWithDelay = (strokes: Stroke[]) => {
+      const ctx = ctxRef.current
+      if (!ctx) return
+      clearCanvas(canvasRef, ctxRef)
+
+      let s = 0, p = 0;
+
+      const drawNextPoint = () => {
+         const stroke = strokes[s];
+         const pt = stroke.paths[p];
+
+         if (p === 0) ctx.beginPath();
+         if (p === 0) ctx.moveTo(pt.x, pt.y);
+         else ctx.lineTo(pt.x, pt.y);
+         ctx.stroke();
+
+         p++;
+         if (p >= stroke.paths.length) {
+            s++;
+            p = 0;
+         }
+
+         if (s < strokes.length) {
+            setTimeout(drawNextPoint, 16);
+         }
+
+      }
+
+      setTimeout(drawNextPoint, 0);
    }
 
    const startDrawTouch = (e: React.TouchEvent<HTMLCanvasElement>) => {
