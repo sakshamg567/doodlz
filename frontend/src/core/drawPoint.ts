@@ -4,7 +4,7 @@ import { type Point } from "../types/types"
 export default function drawIncomingPoint(ctxRef: React.RefObject<CanvasRenderingContext2D | null>, point: Point) {
    const ctx = ctxRef.current
    if (!ctx) return
-
+   ctx.strokeStyle = point.pointColor;
    if (point.type === "start") {
       ctx.beginPath()
       ctx.moveTo(point.x, point.y)

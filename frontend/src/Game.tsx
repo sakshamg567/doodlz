@@ -1,37 +1,29 @@
-import { useEffect, useRef, useState } from "react"
-import { type WSMessage, type Stroke, type Point, type Player } from "./types/types"
-import { sendPoint, drawPoint, getTouchPos, clearAll, clearCanvas } from "./core"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { type WSMessage, type Stroke, type Point, type Player, type ChatMsg } from "./types/types"
+import { sendPoint, drawPoint, clearAll, clearCanvas, pointerPos } from "./core"
 import { getOrCreateGuestId } from "./core/lib/guesId"
-import { Input } from "./components/ui/input";
-
-// Classic MS Paint style color palette
-const PALETTE = [
-   "#000000", "#808080", "#FFFFFF",
-   "#800000", "#FF0000", "#FFA500", "#FFFF00",
-   "#008000", "#00FF00", "#008080", "#00FFFF",
-   "#000080", "#0000FF", "#800080", "#FF00FF",
-   "#964B00"
-];
+import { PALETTE } from "./core/constants";
 
 const Game = ({ roomId }: { roomId: string }) => {
    const canvasRef = useRef<HTMLCanvasElement | null>(null)
    const ctxRef = useRef<CanvasRenderingContext2D | null>(null)
    const socketRef = useRef<WebSocket | null>(null)
-   const drawing = useRef(false)
+   const drawingRef = useRef(false)
+   const listRef = useRef(null);
+
    const [connectedUsers, setConnectedUsers] = useState<Player[] | []>([])
    const [allStrokes, setAllStrokes] = useState<Stroke[]>([])
    const [currentStroke, setCurrentStroke] = useState<Point[]>([])
+   const [chatMessages, setChatMessages] = useState<ChatMsg[]>([]);
+   const [input, setInput] = useState("")
+
    const [isHost, setIsHost] = useState<boolean>(false)
+
    const [strokeColor, setStrokeColor] = useState("#000000");
-   // optional: stroke size
    const [strokeWidth, setStrokeWidth] = useState(3);
 
-   const lastSentTime = useRef(0)
-   const THROTTLE_MS = 16 // ~60fps
 
    const id = getOrCreateGuestId();
-   console.log(id);
-
 
    useEffect(() => {
       const canvas = canvasRef.current
@@ -52,10 +44,7 @@ const Game = ({ roomId }: { roomId: string }) => {
       }
 
       socketRef.current = new WebSocket(`ws://localhost:3000/ws/${roomId}/${id}`)
-      socketRef.current.onopen = () => console.log("Connected to WebSocket")
       socketRef.current.onmessage = handleSocketMessage
-      socketRef.current.onclose = () => console.log("WebSocket closed")
-      socketRef.current.onerror = (err) => console.error("WebSocket error", err)
 
       return () => socketRef.current?.close()
    }, [roomId])
@@ -68,13 +57,9 @@ const Game = ({ roomId }: { roomId: string }) => {
       }
    }, [strokeColor, strokeWidth]);
 
+
    const handleSocketMessage = (event: MessageEvent) => {
       const message: WSMessage = JSON.parse(event.data)
-
-
-      // 
-      console.log("message : ", message);
-
 
       switch (message.type) {
          case "draw_point":
@@ -109,71 +94,13 @@ const Game = ({ roomId }: { roomId: string }) => {
          case "game_state":
             replayAllStrokesWithDelay(message.data.strokes || [])
             setAllStrokes(message.data.strokes || [])
-
-            console.log(message.data.hostId);
-
-
             if (message.data.hostId) {
                setIsHost(message.data.hostId === id)
             }
             break
+         case 'chat_msg':
+            setChatMessages(prev => [...prev, message.data])
       }
-   }
-
-   const startDraw = (e: React.MouseEvent<HTMLCanvasElement>) => {
-      if (!isHost) return;
-      drawing.current = true;
-      const { offsetX, offsetY } = e.nativeEvent;
-      ctxRef.current?.beginPath();
-      ctxRef.current?.moveTo(offsetX, offsetY);
-      const point = { x: offsetX, y: offsetY, type: "start" as const };
-      setCurrentStroke([point]);
-      sendPoint(socketRef, point); // (optionally include color/width)
-   }
-
-   const draw = (e: React.MouseEvent<HTMLCanvasElement>) => {
-      if (!isHost) return
-      if (!drawing.current) return
-      const now = Date.now();
-      const shouldSend = now - lastSentTime.current > THROTTLE_MS;
-
-      const { offsetX, offsetY } = e.nativeEvent
-      const point = { x: offsetX, y: offsetY, type: "move" as const }
-
-      setCurrentStroke(prev => [...prev, point]);
-      ctxRef.current?.lineTo(offsetX, offsetY)
-      ctxRef.current?.stroke()
-
-      if (shouldSend) {
-         sendPoint(socketRef, point)
-         lastSentTime.current = now;
-      }
-   }
-
-   const endDraw = () => {
-      if (!isHost) return
-      if (!drawing.current) return
-      drawing.current = false
-
-      // Send complete stroke to backend
-      const completedStroke: Stroke = {
-         strokeColor,
-         strokeWidth,
-         paths: currentStroke
-      }
-
-      // Send stroke message to backend
-      const strokeMsg: WSMessage = {
-         type: "stroke",
-         data: completedStroke
-      }
-      socketRef.current?.send(JSON.stringify(strokeMsg))
-
-      // Add to local strokes
-      setAllStrokes(prev => [...prev, completedStroke])
-      setCurrentStroke([])
-
-      sendPoint(socketRef, { x: 0, y: 0, type: "end" })
    }
 
    const undoLast = () => {
@@ -234,53 +161,40 @@ const Game = ({ roomId }: { roomId: string }) => {
       setTimeout(drawNextPoint, 0);
    }
 
-   const startDrawTouch = (e: React.TouchEvent<HTMLCanvasElement>) => {
-      if (!isHost) return
-      e.preventDefault() // Prevent scrolling
+   const handlePointerDown = (e: React.PointerEvent) => {
+      if (!isHost) return;
+      e.preventDefault();
+      const ctx = ctxRef.current;
+      if (!ctx) return;
 
-      const now = Date.now();
-      const shouldSend = now - lastSentTime.current > THROTTLE_MS;
+      canvasRef.current?.setPointerCapture(e.pointerId);
+      drawingRef.current = true;
+      setCurrentStroke([]);
+      const { x, y } = pointerPos(e, canvasRef);
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      const startPoint: Point = { x, y, type: "start", pointColor: strokeColor };
+      setCurrentStroke(prev => [...prev, startPoint]);
+      sendPoint(socketRef, startPoint);
+   };
 
-      drawing.current = true
-      const { offsetX, offsetY } = getTouchPos(canvasRef, e)
-      const point = { x: offsetX, y: offsetY, type: "start" as const }
+   const handlePointerMove = (e: React.PointerEvent) => {
+      if (!drawingRef.current || !isHost) return;
+      e.preventDefault();
+      const ctx = ctxRef.current;
+      if (!ctx) return;
+      const { x, y } = pointerPos(e, canvasRef);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+      const movePoint: Point = { x, y, type: "move", pointColor: strokeColor };
+      setCurrentStroke(prev => [...prev, movePoint]);
+      sendPoint(socketRef, movePoint);
+   };
 
-      // Initialize current stroke
-      if (shouldSend) {
+   const finishStroke = useCallback(() => {
+      if (!drawingRef.current) return;
+      drawingRef.current = false;
 
-         setCurrentStroke([point])
-
-         ctxRef.current?.beginPath()
-         ctxRef.current?.moveTo(offsetX, offsetY)
-
-         sendPoint(socketRef, point)
-         lastSentTime.current = now
-      }
-   }
-
-   const drawTouch = (e: React.TouchEvent<HTMLCanvasElement>) => {
-      if (!isHost) return
-      e.preventDefault() // Prevent scrolling
-      if (!drawing.current) return
-      const { offsetX, offsetY } = getTouchPos(canvasRef, e)
-      const point = { x: offsetX, y: offsetY, type: "move" as const }
-
-      // Add to current stroke
-      setCurrentStroke(prev => [...prev, point])
-
-      ctxRef.current?.lineTo(offsetX, offsetY)
-      ctxRef.current?.stroke()
-
-      sendPoint(socketRef, point)
-   }
-
-   const endDrawTouch = (e: React.TouchEvent<HTMLCanvasElement>) => {
-      if (!isHost) return
-      e.preventDefault() // Prevent scrolling
-      if (!drawing.current) return
-      drawing.current = false
-
-      // Send complete stroke to backend
       const completedStroke: Stroke = {
          strokeColor,
          strokeWidth,
@@ -293,13 +207,37 @@ const Game = ({ roomId }: { roomId: string }) => {
          data: completedStroke
       }
       socketRef.current?.send(JSON.stringify(strokeMsg))
-
-      // Add to local strokes
       setAllStrokes(prev => [...prev, completedStroke])
-      setCurrentStroke([])
+      setCurrentStroke([]);
+      const endPoint: Point = { x: 0, y: 0, type: "end", pointColor: strokeColor };
+      sendPoint(socketRef, endPoint);
+   }, [strokeColor, strokeWidth, setCurrentStroke, currentStroke])
 
+   const handlePointerUp = (e: React.PointerEvent) => {
+      if (!isHost) return;
+      e.preventDefault();
+      finishStroke();
+   };
+   const handlePointerLeave = (e: React.PointerEvent) => {
+      if (!isHost) return;
+      if (drawingRef.current) finishStroke();
+   }
 
-      sendPoint(socketRef, { x: 0, y: 0, type: "end" })
+   const submitChatMsg = (msg: string) => {
+      const text = msg.trim();
+      if (!socketRef.current || !text) return;
+
+      const payload: ChatMsg = {
+         sender: { ID: id, Name: "Guest-" + id.slice(0, 4), Points: 0 },
+         message: msg
+      }
+
+      const chatWS: WSMessage = {
+         type: 'chat_msg',
+         data: payload
+      };
+      setInput("")
+      socketRef.current.send(JSON.stringify(chatWS));
    }
 
    return (
@@ -310,18 +248,13 @@ const Game = ({ roomId }: { roomId: string }) => {
                {/* Title bar */}
                <div className="flex items-center justify-between rounded-t-md bg-gradient-to-b from-[#0b65ad] to-[#0a4f84] px-3 py-1 text-sm font-semibold text-white shadow">
                   <span>Doodlz - {roomId}</span>
-                  <div className="flex gap-1">
-                     <span className="h-3 w-3 rounded-sm bg-yellow-300" />
-                     <span className="h-3 w-3 rounded-sm bg-green-400" />
-                     <span className="h-3 w-3 rounded-sm bg-red-400" />
-                  </div>
                </div>
 
                {/* Content frame */}
                <div className="rounded-b-md border border-[#0a4f84] bg-slate-100 shadow-[0_0_0_1px_rgba(0,0,0,0.3)]">
                   {/* Toolbar row */}
                   <div className="flex flex-wrap items-center gap-3 border-b bg-slate-200 px-3 py-2">
-                     <div className="flex items-center gap-2">
+                     {isHost && <div className="flex items-center gap-2">
                         <label className="text-xs font-medium text-slate-700">Width</label>
                         <input
                            type="range"
@@ -332,7 +265,7 @@ const Game = ({ roomId }: { roomId: string }) => {
                            className="h-2 cursor-pointer"
                         />
                         <span className="w-6 text-center text-xs">{strokeWidth}</span>
-                     </div>
+                     </div>}
                      {isHost && (
                         <div className="flex items-center gap-2">
                            <button
@@ -354,66 +287,92 @@ const Game = ({ roomId }: { roomId: string }) => {
                      </div>
                   </div>
 
-                  {/* Drawing area */}
+                  {/* drawing area */}
                   <div className="flex flex-col items-stretch gap-2 p-3">
                      <div className="relative rounded border border-slate-400 bg-white shadow-inner">
                         <canvas
                            ref={canvasRef}
                            className="block h-[420px] w-full"
-                           onMouseDown={startDraw}
-                           onMouseMove={draw}
-                           onMouseUp={endDraw}
-                           onMouseLeave={endDraw}
-                           onTouchStart={startDrawTouch}
-                           onTouchMove={drawTouch}
-                           onTouchEnd={endDrawTouch}
-                           onTouchCancel={endDrawTouch}
+                           onPointerCancel={handlePointerLeave}
+                           onPointerLeave={handlePointerLeave}
+                           onPointerDown={handlePointerDown}
+                           onPointerMove={handlePointerMove}
+                           onPointerUp={handlePointerUp}
                            style={{ touchAction: "none", backgroundColor: "#ffffff" }}
                         />
                      </div>
 
                      {/* Color palette */}
-                     <div className="flex flex-col gap-1">
-                        <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">Colors</span>
-                        <div className="grid grid-cols-9 gap-1">
-                           {PALETTE.map(c => {
-                              const active = c === strokeColor;
-                              return (
-                                 <button
-                                    key={c}
-                                    onClick={() => setStrokeColor(c)}
-                                    className={`h-6 w-6 rounded-sm border ${active ? "border-black ring-2 ring-offset-1 ring-sky-500" : "border-slate-400"}`}
-                                    style={{ backgroundColor: c }}
-                                    title={c}
-                                 />
-                              );
-                           })}
-                           {/* custom color swatch (placeholder) */}
-                           <button
-                              onClick={() => {
-                                 const v = prompt("Custom hex color:", strokeColor) || strokeColor;
-                                 setStrokeColor(v);
-                              }}
-                              className="flex h-6 w-6 items-center justify-center rounded-sm border border-slate-400 bg-gradient-to-br from-slate-200 to-slate-300 text-[10px] font-medium"
-                           >
-                              +
-                           </button>
-                        </div>
-                     </div>
+                     {isHost &&
+                        <div className="flex flex-col gap-1">
+                           <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">Colors</span>
+                           <div className="grid grid-cols-9 gap-1">
+                              {PALETTE.map(c => {
+                                 const active = c === strokeColor;
+                                 return (
+                                    <button
+                                       key={c}
+                                       onClick={() => setStrokeColor(c)}
+                                       className={`h-6 w-6 rounded-sm border ${active ? "border-black ring-2 ring-offset-1 ring-sky-500" : "border-slate-400"}`}
+                                       style={{ backgroundColor: c }}
+                                       title={c}
+                                    />
+                                 );
+                              })}
+                              {/* custom color swatch (placeholder) */}
+                              <button
+                                 onClick={() => {
+                                    const v = prompt("Custom hex color:", strokeColor) || strokeColor;
+                                    setStrokeColor(v);
+                                 }}
+                                 className="flex h-6 w-6 items-center justify-center rounded-sm border border-slate-400 bg-gradient-to-br from-slate-200 to-slate-300 text-[10px] font-medium"
+                              >
+                                 +
+                              </button>
+                           </div>
+                        </div>}
                   </div>
                </div>
             </div>
 
             {/* Chat side panel */}
-            <div className="flex w-72 flex-col rounded-md border border-[#0a4f84] bg-slate-100 shadow">
-               <div className="rounded-t-md bg-gradient-to-b from-[#0b65ad] to-[#0a4f84] px-3 py-1 text-sm font-semibold text-white">
-                  Chat
-               </div>
-               <div id="messages" className="flex-1 overflow-y-auto p-2 text-xs">
-                  {/* messages go here */}
+            <div className={`flex w-72 flex-col rounded-md border bg-slate-100 shadow`}>
+               <div
+                  ref={listRef}
+                  className="flex-1 overflow-y-auto p-2 text-xs space-y-1"
+               >
+                  {chatMessages.map((m, i) => {
+                     const senderName = m.sender?.Name || m.sender?.ID || "User";
+                     return (
+                        <div key={i} className={`${i % 2 == 1 ? 'bg-gray-200' : ''} p-1`}>
+                           <span className="font-semibold">{senderName}:</span>{" "}
+                           <span className="break-words">{m.message}</span>
+                        </div>
+                     );
+                  })}
                </div>
                <div className="border-t p-2">
-                  <Input placeholder="Type message..." className="h-8 text-xs" />
+                  <form
+                     onSubmit={e => {
+                        e.preventDefault()
+                        submitChatMsg(input);
+                     }}
+                     className="flex gap-1"
+                  >
+                     <input
+                        placeholder="Type message..."
+                        className="h-8 text-xs flex-1 p-1"
+                        value={input}
+                        onChange={e => setInput(e.target.value)}
+                        onKeyDown={e => {
+                           if (e.key === "Enter" && !e.shiftKey) {
+                              e.preventDefault();
+                              submitChatMsg(input);
+                              e.stopPropagation();
+                           }
+                        }}
+                     />
+                  </form>
                </div>
             </div>
          </div>

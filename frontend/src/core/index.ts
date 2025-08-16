@@ -1,12 +1,12 @@
 import sendPoint from "./sendPoint";
 import drawPoint from "./drawPoint";
-import getTouchPos from "./canvas-utils/getTouchpos";
+import pointerPos from "./canvas-utils/getPointerPos";
 import { clearAll, clearCanvas } from "./canvas-utils/clearAll";
 
 export {
    sendPoint,
    drawPoint,
-   getTouchPos,
+   pointerPos,
    clearAll,
    clearCanvas
 }
