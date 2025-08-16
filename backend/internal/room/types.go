@@ -52,9 +52,10 @@ type WSMessage struct {
 }
 
 type Point struct {
-	X    float64 `json:"x"`
-	Y    float64 `json:"y"`
-	Type string  `json:"type,omitempty"`
+	X     float64 `json:"x"`
+	Y     float64 `json:"y"`
+	Color string  `json:"color"`
+	Type  string  `json:"type,omitempty"`
 }
 
 type Stroke struct {
