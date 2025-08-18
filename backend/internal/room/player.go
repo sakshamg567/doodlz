@@ -81,14 +81,7 @@ func (p *Player) ReadPump(r *Room) {
 
 			case "guess":
 				logger.Info("Player %s - Processing guess", p.ID)
-				var payload struct {
-					Guess string `json:"guess"`
-				}
-				if err := json.Unmarshal(wsMsg.Data, &payload); err != nil {
-					logger.Info("Player %s - Invalid guess payload: %v", p.ID, err)
-					continue
-				}
-				// r.handleGuess(p, payload.Guess)
+				r.handleGuess(p, wsMsg)
 
 			case "draw_point":
 				logger.Info("broadcasting back point")

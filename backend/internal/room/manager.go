@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/sakshamg567/doodlz/backend/logger"
 	"github.com/sakshamg567/doodlz/backend/pkg/utils"
 )
 
@@ -30,6 +31,14 @@ func (rm *RoomManager) CreateRoomHandler(c *fiber.Ctx) error {
 
 	roomId := utils.GenShortID()
 
+	randomWord, err := utils.GetRandomWord(0)
+	if err != nil {
+		logger.Error(err.Error())
+		randomWord = ""
+	}
+
+	logger.Info("randomWord : \n\n\n", randomWord)
+
 	room := &Room{
 		ID:         roomId,
 		Players:    make(map[string]*Player),
@@ -38,6 +47,11 @@ func (rm *RoomManager) CreateRoomHandler(c *fiber.Ctx) error {
 		Unregister: make(chan *Player, 10), // ✅ Buffered
 		Broadcast:  make(chan []byte, 100),
 		done:       make(chan struct{}),
+		Game: &GameState{
+			Phase:    GamePhaseDrawing,
+			DrawerID: body.HostId,
+			word:     randomWord,
+		},
 	}
 
 	rm.Lock()

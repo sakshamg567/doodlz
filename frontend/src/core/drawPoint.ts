@@ -5,6 +5,7 @@ export default function drawIncomingPoint(ctxRef: React.RefObject<CanvasRenderin
    const ctx = ctxRef.current
    if (!ctx) return
    ctx.strokeStyle = point.pointColor;
+   ctx.lineWidth = point.pointSize;
    if (point.type === "start") {
       ctx.beginPath()
       ctx.moveTo(point.x, point.y)

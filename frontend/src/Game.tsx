@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { type WSMessage, type Stroke, type Point, type Player, type ChatMsg } from "./types/types"
+import { type WSMessage, type Stroke, type Point, type Player, type UiMessage } from "./types/types"
 import { sendPoint, drawPoint, clearAll, clearCanvas, pointerPos } from "./core"
 import { getOrCreateGuestId } from "./core/lib/guesId"
 import { PALETTE } from "./core/constants";
@@ -14,8 +14,9 @@ const Game = ({ roomId }: { roomId: string }) => {
    const [connectedUsers, setConnectedUsers] = useState<Player[] | []>([])
    const [allStrokes, setAllStrokes] = useState<Stroke[]>([])
    const [currentStroke, setCurrentStroke] = useState<Point[]>([])
-   const [chatMessages, setChatMessages] = useState<ChatMsg[]>([]);
+   const [messages, setMessages] = useState<UiMessage[]>([]);
    const [input, setInput] = useState("")
+   const [points, setPoints] = useState(0);
 
    const [isHost, setIsHost] = useState<boolean>(false)
 
@@ -58,48 +59,85 @@ const Game = ({ roomId }: { roomId: string }) => {
    }, [strokeColor, strokeWidth]);
 
 
-   const handleSocketMessage = (event: MessageEvent) => {
-      const message: WSMessage = JSON.parse(event.data)
+   useEffect(() => {
+      const el = listRef.current as unknown as HTMLDivElement | null;
+      if (el) el.scrollTop = el.scrollHeight;
+   }, [messages]);
 
-      switch (message.type) {
-         case "draw_point":
-            drawPoint(ctxRef, message.data)
-            break
-         case "stroke": {
-            const newStroke: Stroke = message.data
-            setAllStrokes((prev) => [...prev, newStroke])
-            break
-         }
-         case "clear":
-            clearCanvas(canvasRef, ctxRef)
-            setAllStrokes([]) // Clear stroke history
-            break
-         case "undo": {
-            setAllStrokes(prev => {
-               if (prev.length === 0) return prev
-               const updated = prev.slice(0, -1)
-               replayAllStrokes(updated)
-               return updated
-            })
-            break
-         }
-         case "user_joined": {
-            const users = Object.values(message.data)
-            setConnectedUsers(users as Player[])
-            break
-         }
-         case "user_left":
-            setConnectedUsers(prev => prev.filter(id => id !== message.data.userId))
-            break
-         case "game_state":
-            replayAllStrokesWithDelay(message.data.strokes || [])
-            setAllStrokes(message.data.strokes || [])
-            if (message.data.hostId) {
-               setIsHost(message.data.hostId === id)
-            }
-            break
+   function normalizeInbound(msg: WSMessage): UiMessage | null {
+      // If server (legacy) wraps under type 'message' with inner msg.data.type, unwrap
+      const baseType = msg.type === 'message' && msg.data?.type ? msg.data.type : msg.type;
+      const payload = msg.type === 'message' && msg.data?.data ? msg.data.data : msg.data;
+
+      switch (baseType) {
          case 'chat_msg':
-            setChatMessages(prev => [...prev, message.data])
+            return {
+               type: 'chat_msg',
+               sender: payload.sender ?? {
+                  ID: payload.playerId ?? 'unknown',
+                  Name: payload.playerName ?? 'User',
+                  Points: payload.sender?.Points ?? 0
+               },
+               message: payload.message ?? ''
+            };
+         case 'correct_guess':
+            return {
+               type: 'correct_guess',
+               playerId: payload.playerId,
+               playerName: payload.playerName,
+               message: payload.message
+            };
+         case 'close_guess':
+            return {
+               type: 'close_guess',
+               playerId: payload.playerId,
+               playerName: payload.playerName,
+               editDistance: payload.editDistance ?? 0,
+               message: payload.message
+            };
+         default:
+            return null;
+      }
+   }
+
+   const handleSocketMessage = (event: MessageEvent) => {
+      const raw: WSMessage = JSON.parse(event.data);
+      console.log(raw);
+
+      switch (raw.type) {
+         case 'draw_point':
+            drawPoint(ctxRef, raw.data);
+            return;
+         case 'stroke':
+            setAllStrokes(prev => [...prev, raw.data as Stroke]);
+            return;
+         case 'clear':
+            clearCanvas(canvasRef, ctxRef);
+            setAllStrokes([]);
+            return;
+         case 'undo':
+            setAllStrokes(prev => {
+               if (!prev.length) return prev;
+               const upd = prev.slice(0, -1);
+               replayAllStrokes(upd);
+               return upd;
+            });
+            return;
+         case 'user_joined':
+            setConnectedUsers(Object.values(raw.data) as Player[]);
+            return;
+         case 'user_left':
+            setConnectedUsers(prev => prev.filter(u => u.ID !== raw.data.userId));
+            return;
+         case 'game_state':
+            replayAllStrokesWithDelay(raw.data.strokes || []);
+            setAllStrokes(raw.data.strokes || []);
+            if (raw.data.hostId) setIsHost(raw.data.hostId === id);
+            return;
+         default: {
+            const ui = normalizeInbound(raw);
+            if (ui) setMessages(prev => [...prev, ui]);
+         }
       }
    }
 
@@ -173,7 +211,7 @@ const Game = ({ roomId }: { roomId: string }) => {
       const { x, y } = pointerPos(e, canvasRef);
       ctx.beginPath();
       ctx.moveTo(x, y);
-      const startPoint: Point = { x, y, type: "start", pointColor: strokeColor };
+      const startPoint: Point = { x, y, type: "start", pointColor: strokeColor, pointSize: strokeWidth };
       setCurrentStroke(prev => [...prev, startPoint]);
       sendPoint(socketRef, startPoint);
    };
@@ -186,7 +224,7 @@ const Game = ({ roomId }: { roomId: string }) => {
       const { x, y } = pointerPos(e, canvasRef);
       ctx.lineTo(x, y);
       ctx.stroke();
-      const movePoint: Point = { x, y, type: "move", pointColor: strokeColor };
+      const movePoint: Point = { x, y, type: "move", pointColor: strokeColor, pointSize: strokeWidth };
       setCurrentStroke(prev => [...prev, movePoint]);
       sendPoint(socketRef, movePoint);
    };
@@ -209,7 +247,7 @@ const Game = ({ roomId }: { roomId: string }) => {
       socketRef.current?.send(JSON.stringify(strokeMsg))
       setAllStrokes(prev => [...prev, completedStroke])
       setCurrentStroke([]);
-      const endPoint: Point = { x: 0, y: 0, type: "end", pointColor: strokeColor };
+      const endPoint: Point = { x: 0, y: 0, type: "end", pointColor: strokeColor, pointSize: strokeWidth };
       sendPoint(socketRef, endPoint);
    }, [strokeColor, strokeWidth, setCurrentStroke, currentStroke])
 
@@ -223,22 +261,16 @@ const Game = ({ roomId }: { roomId: string }) => {
       if (drawingRef.current) finishStroke();
    }
 
+   // submitChatMsg: just send guess text (server fills sender)
    const submitChatMsg = (msg: string) => {
       const text = msg.trim();
       if (!socketRef.current || !text) return;
-
-      const payload: ChatMsg = {
-         sender: { ID: id, Name: "Guest-" + id.slice(0, 4), Points: 0 },
-         message: msg
-      }
-
-      const chatWS: WSMessage = {
-         type: 'chat_msg',
-         data: payload
-      };
-      setInput("")
-      socketRef.current.send(JSON.stringify(chatWS));
-   }
+      socketRef.current.send(JSON.stringify({
+         type: 'guess',
+         data: { guess: text }
+      }));
+      setInput('');
+   };
 
    return (
       <div className="flex h-screen w-screen items-center justify-center bg-neutral-900/60 p-4">
@@ -341,14 +373,33 @@ const Game = ({ roomId }: { roomId: string }) => {
                   ref={listRef}
                   className="flex-1 overflow-y-auto p-2 text-xs space-y-1"
                >
-                  {chatMessages.map((m, i) => {
-                     const senderName = m.sender?.Name || m.sender?.ID || "User";
-                     return (
-                        <div key={i} className={`${i % 2 == 1 ? 'bg-gray-200' : ''} p-1`}>
-                           <span className="font-semibold">{senderName}:</span>{" "}
-                           <span className="break-words">{m.message}</span>
-                        </div>
-                     );
+                  {messages.map((m, i) => {
+                     switch (m.type) {
+                        case 'chat_msg':
+                           return (
+                              <div key={i} className={`${i % 2 ? 'bg-gray-200' : ''} p-1`}>
+                                 <span className="font-semibold">{m.sender.Name}:</span>{" "}
+                                 <span className="break-words">
+                                    {m.message}
+                                 </span>
+                              </div>
+                           )
+                        case 'correct_guess':
+                           return (
+                              <div key={i} className="p-1 text-green-600 font-semibold">
+                                 {m.playerName} guessed the word!
+                              </div>
+                           );
+                        case 'close_guess':
+                           return (
+                              <div key={i} className={`p-1 ${m.editDistance > 0 ? 'text-lime-400' : 'text-black'}`}>
+                                 <span className="font-semibold">{m.playerName}:</span>{" "}
+                                 <span className="break-words">
+                                    {m.message == "" ? m.Message : m.message}
+                                 </span>
+                              </div>
+                           );
+                     }
                   })}
                </div>
                <div className="border-t p-2">

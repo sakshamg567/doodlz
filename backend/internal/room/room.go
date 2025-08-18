@@ -2,9 +2,11 @@ package room
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/agnivade/levenshtein"
 	"github.com/sakshamg567/doodlz/backend/logger"
 )
 
@@ -56,7 +58,228 @@ func (r *Room) BroadcastWS(t string, d any) {
 			r.broadcast(payload)
 		}
 	}
+}
 
+func (r *Room) handleGuess(p *Player, wsMsg WSMessage) {
+	start := time.Now()
+
+	var payload struct {
+		Guess   string `json:"guess"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(wsMsg.Data, &payload); err != nil {
+		logger.Info("handleGuess: player=%s invalid payload err=%v", p.ID, err)
+		return
+	}
+
+	raw := strings.TrimSpace(func() string {
+		if payload.Guess != "" {
+			return payload.Guess
+		}
+		return payload.Message
+	}())
+	if raw == "" {
+		logger.Info("handleGuess: player=%s empty input", p.ID)
+		return
+	}
+
+	guessLower := strings.ToLower(raw)
+
+	playerID := p.ID
+	playerName := p.Name
+
+	// Decision flags collected under lock
+	var (
+		isGuessContext bool
+		correct        bool
+		closeDistance  int
+		sendCloseHint  bool
+		alreadyGuessed bool
+	)
+
+	logger.Info("handleGuess: player=%s acquiring lock", p.ID)
+	r.Mu.Lock()
+
+	game := r.Game
+	if game != nil &&
+		game.Phase == GamePhaseDrawing &&
+		game.word != "" &&
+		playerID != game.DrawerID {
+
+		isGuessContext = true
+
+		if game.GuessedPlayers == nil {
+			game.GuessedPlayers = make(map[string]bool)
+		}
+
+		if game.GuessedPlayers[playerID] {
+			alreadyGuessed = true
+		} else {
+			target := strings.ToLower(game.word)
+			dist := levenshtein.ComputeDistance(guessLower, target)
+
+			if dist == 0 {
+				game.GuessedPlayers[playerID] = true
+				timeLeft := game.EndsAtUnix - time.Now().Unix()
+				if timeLeft < 0 {
+					timeLeft = 0
+				}
+				p.Points += 100 + int(timeLeft)
+				correct = true
+			} else if dist <= 2 {
+				closeDistance = dist
+				sendCloseHint = true
+			}
+		}
+	}
+
+	r.Mu.Unlock()
+	logger.Info("handleGuess: player=%s released lock (guessCtx=%v correct=%v close=%v already=%v) elapsed=%s",
+		p.ID, isGuessContext, correct, sendCloseHint, alreadyGuessed, time.Since(start))
+
+	// Post-lock actions
+	if alreadyGuessed {
+		// Echo original text only to that player (optional)
+		r.WsMsgTo(p, "message", struct {
+			Type string `json:"type"`
+			Data struct {
+				Sender struct {
+					ID   string `json:"ID"`
+					Name string `json:"Name"`
+				} `json:"sender"`
+				Message string `json:"message"`
+			} `json:"data"`
+		}{
+			Type: "chat_msg",
+			Data: struct {
+				Sender struct {
+					ID   string `json:"ID"`
+					Name string `json:"Name"`
+				} `json:"sender"`
+				Message string `json:"message"`
+			}{
+				Sender: struct {
+					ID   string `json:"ID"`
+					Name string `json:"Name"`
+				}{
+					ID:   playerID,
+					Name: playerName,
+				},
+				Message: raw,
+			},
+		})
+		return
+	}
+
+	if correct {
+		logger.Info("handleGuess: player=%s correct guess broadcast", p.ID)
+		r.BroadcastWS("message", struct {
+			Type string `json:"type"`
+			Data struct {
+				PlayerID   string `json:"playerId"`
+				PlayerName string `json:"playerName"`
+				Message    string `json:"message"`
+			} `json:"data"`
+		}{
+			Type: "correct_guess",
+			Data: struct {
+				PlayerID   string `json:"playerId"`
+				PlayerName string `json:"playerName"`
+				Message    string `json:"message"`
+			}{
+				PlayerID:   playerID,
+				PlayerName: playerName,
+				Message:    playerName + " has guessed the word",
+			},
+		})
+		return
+	}
+
+	if isGuessContext && sendCloseHint {
+		logger.Info("handleGuess: player=%s close guess dist=%d", p.ID, closeDistance)
+
+		type CloseGuess struct {
+			Type string      `json:"type"`
+			Data interface{} `json:"data"`
+		}
+
+		// Full distance only to guesser
+		r.WsMsgTo(p, "message", CloseGuess{
+			Type: "close_guess",
+			Data: struct {
+				PlayerID     string `json:"playerId"`
+				PlayerName   string `json:"playerName"`
+				EditDistance int    `json:"editDistance"`
+				Message      string `json:"message"`
+			}{
+				PlayerID:     playerID,
+				PlayerName:   playerName,
+				EditDistance: closeDistance,
+				Message:      guessLower,
+			},
+		})
+		// Masked (0) to others
+		r.BroadcastWSExcept(p, "message", CloseGuess{
+			Type: "close_guess",
+			Data: struct {
+				PlayerID     string `json:"playerId"`
+				PlayerName   string `json:"playerName"`
+				EditDistance int    `json:"editDistance"`
+				Message      string `json:"message"`
+			}{
+				PlayerID:     playerID,
+				PlayerName:   playerName,
+				EditDistance: 0,
+				Message:      guessLower,
+			},
+		})
+		return
+	}
+
+	// Normal chat
+	logger.Info("handleGuess: player=%s normal chat broadcast", p.ID)
+	r.BroadcastWS("message", struct {
+		Type string      `json:"type"`
+		Data interface{} `json:"data"`
+	}{
+		Type: "chat_msg",
+		Data: struct {
+			Sender struct {
+				ID   string `json:"ID"`
+				Name string `json:"Name"`
+			} `json:"sender"`
+			Message string `json:"message"`
+		}{
+			Sender: struct {
+				ID   string `json:"ID"`
+				Name string `json:"Name"`
+			}{
+				ID:   playerID,
+				Name: playerName,
+			},
+			Message: raw,
+		},
+	})
+}
+
+func (r *Room) WsMsgTo(p *Player, event string, payload any) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	msgBytes, err := json.Marshal(WSMessage{Type: event, Data: data})
+	if err != nil {
+		return
+	}
+	for _, pl := range r.Players {
+		if pl == p {
+			select {
+			case pl.send <- msgBytes:
+			default:
+			}
+			break
+		}
+	}
 }
 
 func (r *Room) isHost(p *Player) bool {
