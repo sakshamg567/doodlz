@@ -68,7 +68,6 @@ func (p *Player) ReadPump(r *Room) {
 			}
 
 			// Add comprehensive loggerging
-			logger.Info("Player %s - Received message type: %s, raw data: %s", p.ID, wsMsg.Type, string(wsMsg.Data))
 
 			switch wsMsg.Type {
 			// case "start_game":
@@ -80,16 +79,12 @@ func (p *Player) ReadPump(r *Room) {
 			// r.Mu.Unlock()
 
 			case "guess":
-				logger.Info("Player %s - Processing guess", p.ID)
 				r.handleGuess(p, wsMsg)
 
 			case "draw_point":
-				logger.Info("broadcasting back point")
-
 				r.BroadcastWSExcept(p, "draw_point", wsMsg.Data)
 
 			case "stroke":
-				logger.Info("Player %s - Processing stroke", p.ID)
 				var StrokeData Stroke
 
 				if err := json.Unmarshal(wsMsg.Data, &StrokeData); err != nil {
@@ -97,13 +92,10 @@ func (p *Player) ReadPump(r *Room) {
 					continue
 				}
 
-				logger.Info("Player %s - Stroke parsed successfully: %+v", p.ID, StrokeData)
-
 				r.Mu.Lock()
 				r.Strokes = append(r.Strokes, StrokeData)
 				r.Mu.Unlock()
 
-				logger.Info("Player %s - Broadcasting stroke to room %s", p.ID, r.ID)
 				r.BroadcastWSExcept(p, "stroke", StrokeData)
 
 			case "test":
@@ -123,11 +115,9 @@ func (p *Player) ReadPump(r *Room) {
 
 				r.BroadcastWS("undo", `{}`)
 			default:
-				logger.Info("Player %s - Processing default case for type: %s", p.ID, wsMsg.Type)
 				r.broadcast(msg)
 			}
 
-			logger.Info("Player %s - Finished processing message type: %s", p.ID, wsMsg.Type)
 		}
 	}
 }
@@ -151,7 +141,7 @@ func (p *Player) WritePump() {
 				return
 			}
 
-			logger.Info("Player %s - Sending message: %s", p.ID, string(msg))
+			// logger.Info("Player %s - Sending message: %s", p.ID, string(msg))
 
 			if err := p.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 				logger.Error("WriteMessage error for player %s: %v", p.ID, err)

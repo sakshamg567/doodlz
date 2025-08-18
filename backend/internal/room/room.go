@@ -294,7 +294,6 @@ func (r *Room) BroadcastPoint(s *Player, t string, d any) {
 }
 
 func (r *Room) BroadcastWSExcept(s *Player, t string, d any) {
-
 	data, err := json.Marshal(d)
 	if err == nil {
 		msg := WSMessage{
