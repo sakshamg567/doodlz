@@ -2,8 +2,9 @@ package utils
 
 import (
 	"crypto/rand"
-	"encoding/base64"
 )
+
+var charset = []byte("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_")
 
 // GenShortID generates a random base64 encoded string to be used as a unique identifier.
 func GenShortID() string {
@@ -12,5 +13,10 @@ func GenShortID() string {
 	if err != nil {
 		return ""
 	}
-	return base64.RawURLEncoding.EncodeToString(b)
+
+	for i := range b {
+		b[i] = charset[int(b[i])%len(charset)]
+	}
+
+	return string(b)
 }
