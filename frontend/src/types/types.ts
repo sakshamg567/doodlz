@@ -20,7 +20,8 @@ export type WSMessage = {
    | 'chat_msg'
    | 'correct_guess'
    | 'close_guess'
-   | 'message'; // (legacy wrapper)
+   | 'message' // (legacy wrapper)
+   | 'fill'
    data: any;
 };
 
@@ -58,7 +59,7 @@ export type Point = {
 }
 
 export type Player = {
-   ID: string;
-   Name: string;
-   Points: number
+   playerId: string;
+   name: string;
+   points: number
 }

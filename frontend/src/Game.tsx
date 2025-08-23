@@ -4,6 +4,8 @@ import { sendPoint, drawPoint, clearAll, clearCanvas, pointerPos } from "./core"
 import { getOrCreateGuestId } from "./core/lib/guesId"
 import { PALETTE } from "./core/constants";
 import normalizeInbound from "./core/lib/normalizeUiMsg";
+import { Chat } from "./components/Chat";
+import hexToUint32 from "./core/lib/hexToUint32";
 
 const Game = ({ roomId }: { roomId: string }) => {
    const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -17,18 +19,30 @@ const Game = ({ roomId }: { roomId: string }) => {
    const [currentStroke, setCurrentStroke] = useState<Point[]>([])
    const [messages, setMessages] = useState<UiMessage[]>([]);
    const [input, setInput] = useState("")
-   const [points, setPoints] = useState(0);
+   // const [currWord, setCurrWord] = useState("")
 
    const [isHost, setIsHost] = useState<boolean>(false)
 
    const [strokeColor, setStrokeColor] = useState("#000000");
-   const [strokeWidth, setStrokeWidth] = useState(3);
-   // Track players who have guessed correctly this round (by name)
+   const [strokeWidth, setStrokeWidth] = useState(6);
+
+   // NEW: brush states
+   const BRUSH_SIZES = [6, 10, 16, 20];
+   const [tool, setTool] = useState<'brush' | 'bucket'>('brush');
+   const [brushMenuOpen, setBrushMenuOpen] = useState(false);
+   const brushMenuRef = useRef<HTMLDivElement | null>(null);
+
+   // Brush preview (custom cursor)
+   const [showBrushPreview, setShowBrushPreview] = useState(false);
+   const [brushPos, setBrushPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+
+   // Track players who have guessed correctly this round
+
    const guessedNames = useMemo(
       () => new Set(
          messages
             .filter(m => m.type === 'correct_guess')
-            .map(m => (m as any).playerName)
+            .map(m => (m as any).playerId)
       ),
       [messages]
    );
@@ -68,11 +82,86 @@ const Game = ({ roomId }: { roomId: string }) => {
       }
    }, [strokeColor, strokeWidth]);
 
+   // Close brush menu on outside click
+   useEffect(() => {
+      const handler = (e: MouseEvent) => {
+         if (!brushMenuRef.current) return;
+         if (!brushMenuRef.current.contains(e.target as Node)) {
+            setBrushMenuOpen(false);
+         }
+      };
+      if (brushMenuOpen) document.addEventListener('mousedown', handler);
+      return () => document.removeEventListener('mousedown', handler);
+   }, [brushMenuOpen]);
 
    useEffect(() => {
       const el = listRef.current as unknown as HTMLDivElement | null;
       if (el) el.scrollTop = el.scrollHeight;
    }, [messages]);
+
+   function floodFill(x: number, y: number, fillHex: string, broadcast = true) {
+      const ctx = ctxRef.current
+      const canvas = canvasRef.current
+      if (!ctx || !canvas) return
+
+      x = Math.floor(Math.max(0, Math.min(canvas.width - 1, x)));
+      y = Math.floor(Math.max(0, Math.min(canvas.height - 1, y)));
+
+      const w = canvas.width
+      const h = canvas.height
+      const image = ctx.getImageData(0, 0, w, h)
+      const data32 = new Uint32Array(image.data.buffer)
+
+      const startIdx = y * w + x
+      const targetColor = data32[startIdx]
+      const fillColor = hexToUint32(fillHex)
+
+      if (targetColor == fillColor) {
+         if (broadcast && socketRef.current) {
+            socketRef.current.send(JSON.stringify({ type: "fill", data: { x, y, color: fillHex, noop: true } }))
+         }
+         return;
+      }
+
+      const stack: number[] = [startIdx]
+      while (stack.length) {
+         const idx = stack.pop()!
+         if (data32[idx] !== targetColor) continue
+
+         let left = idx
+         let right = idx
+         const rowStart = Math.trunc(idx / w) * w
+         while (left >= rowStart && data32[left] === targetColor) left--;
+         while (right < rowStart + w && data32[right] === targetColor) right++
+
+         let pushedUp = false;
+         let pushedDown = false;
+         for (let i = left + 1; i < right; i++) {
+            data32[i] = fillColor;
+            const up = i - w;
+            const down = i + w;
+            if (!pushedUp && up >= 0 && data32[up] === targetColor) {
+               stack.push(up);
+               pushedUp = true;
+            } else if (pushedUp && up >= 0 && data32[up] !== targetColor) {
+               pushedUp = false;
+            }
+            if (!pushedDown && down < w * h && data32[down] === targetColor) {
+               stack.push(down);
+               pushedDown = true;
+            } else if (pushedDown && down < w * h && data32[down] !== targetColor) {
+               pushedDown = false;
+            }
+         }
+      }
+      ctx.putImageData(image, 0, 0);
+      if (broadcast && socketRef.current) {
+         socketRef.current.send(JSON.stringify({
+            type: "fill",
+            data: { x, y, color: fillHex }
+         }));
+      }
+   }
 
    const handleSocketMessage = (event: MessageEvent) => {
       const raw: WSMessage = JSON.parse(event.data);
@@ -99,14 +188,20 @@ const Game = ({ roomId }: { roomId: string }) => {
             return;
          case 'user_joined':
             setConnectedUsers(Object.values(raw.data) as Player[]);
+            console.log(connectedUsers);
+
             return;
          case 'user_left':
-            setConnectedUsers(prev => prev.filter(u => u.ID !== raw.data.userId));
+            setConnectedUsers(prev => prev.filter(u => u.playerId !== raw.data.userId));
             return;
          case 'game_state':
             replayAllStrokesWithDelay(raw.data.strokes || []);
             setAllStrokes(raw.data.strokes || []);
             if (raw.data.hostId) setIsHost(raw.data.hostId === id);
+            return;
+
+         case 'fill':
+            floodFill(raw.data.x, raw.data.y, raw.data.color, false)
             return;
          default: {
             const ui = normalizeInbound(raw);
@@ -156,7 +251,7 @@ const Game = ({ roomId }: { roomId: string }) => {
 
          p++;
          if (p >= stroke.paths.length) { s++; p = 0; }
-         if (s < strokes.length) setTimeout(drawNextPoint, 8);
+         if (s < strokes.length) setTimeout(drawNextPoint, 16);
          else {
             ctx.strokeStyle = strokeColor;
             ctx.lineWidth = strokeWidth;
@@ -167,14 +262,21 @@ const Game = ({ roomId }: { roomId: string }) => {
 
    const handlePointerDown = (e: React.PointerEvent) => {
       if (!isHost) return;
-      e.preventDefault();
+      const { x, y } = pointerPos(e, canvasRef);
+      if (tool === "bucket") {
+         e.preventDefault();
+         floodFill(x, y, strokeColor, true);
+         return;
+      }
+      e.preventDefault()
+      setShowBrushPreview(true);
       const ctx = ctxRef.current;
       if (!ctx) return;
 
       canvasRef.current?.setPointerCapture(e.pointerId);
       drawingRef.current = true;
       setCurrentStroke([]);
-      const { x, y } = pointerPos(e, canvasRef);
+      setBrushPos({ x, y });
       ctx.beginPath();
       ctx.moveTo(x, y);
       const startPoint: Point = { x, y, type: "start", pointColor: strokeColor, pointSize: strokeWidth };
@@ -183,11 +285,15 @@ const Game = ({ roomId }: { roomId: string }) => {
    };
 
    const handlePointerMove = (e: React.PointerEvent) => {
-      if (!drawingRef.current || !isHost) return;
+      if (!isHost) return;
       e.preventDefault();
+      const { x, y } = pointerPos(e, canvasRef);
+      setBrushPos({ x, y });
+
+      if (!drawingRef.current) return;
+
       const ctx = ctxRef.current;
       if (!ctx) return;
-      const { x, y } = pointerPos(e, canvasRef);
       ctx.lineTo(x, y);
       ctx.stroke();
       const movePoint: Point = { x, y, type: "move", pointColor: strokeColor, pointSize: strokeWidth };
@@ -224,6 +330,7 @@ const Game = ({ roomId }: { roomId: string }) => {
    };
    const handlePointerLeave = (e: React.PointerEvent) => {
       if (!isHost) return;
+      setShowBrushPreview(false);
       if (drawingRef.current) finishStroke();
    }
 
@@ -261,10 +368,10 @@ const Game = ({ roomId }: { roomId: string }) => {
                </div>
                <div className="flex-1 overflow-y-auto p-2 space-y-1">
                   {connectedUsers.map(u => {
-                     const guessed = guessedNames.has(u.Name);
+                     const guessed = guessedNames.has(u.playerId);
                      return (
                         <div
-                           key={u.ID}
+                           key={u.playerId}
                            className={`flex items-center justify-between rounded px-2 py-1 text-xs border transition-colors
                               ${guessed
                                  ? 'bg-green-100 border-green-400 text-green-700 font-semibold'
@@ -272,7 +379,7 @@ const Game = ({ roomId }: { roomId: string }) => {
                               }`}
                            title={guessed ? 'Guessed correctly' : 'Has not guessed yet'}
                         >
-                           <span className="truncate">{u.Name}</span>
+                           <span className="truncate">{u.playerId}</span>
                         </div>
                      );
                   })}
@@ -282,152 +389,186 @@ const Game = ({ roomId }: { roomId: string }) => {
                </div>
             </div>
             <div className="flex-1">
-               {/* Title bar */}
-               <div className="flex items-center justify-between bg-gradient-to-b from-[#0b65ad] to-[#0a4f84] px-3 py-1 text-sm font-semibold text-white shadow">
-                  <span>Doodlz - {roomId}</span>
-               </div>
 
-               {/* Content frame */}
-               <div className="border border-[#0a4f84] bg-slate-100 shadow-[0_0_0_1px_rgba(0,0,0,0.3)]">
-                  {/* Player info */}
+               {/* Player info */}
 
 
 
-                  {/* Toolbar row */}
-                  <div className="flex flex-wrap items-center gap-3 border-b bg-slate-200 px-3 py-2">
-                     {isHost && <div className="flex items-center gap-2">
-                        <label className="text-xs font-medium text-slate-700">Width</label>
-                        <input
-                           type="range"
-                           min={1}
-                           max={12}
-                           value={strokeWidth}
-                           onChange={e => setStrokeWidth(Number(e.target.value))}
-                           className="h-2 cursor-pointer"
+               {/* drawing area */}
+               <div className="flex flex-col items-stretch gap-2 p-3">
+                  <div className="relative border border-slate-400 bg-white shadow-inner">
+                     {/* Canvas wrapper now relative for brush preview */}
+                     <canvas
+                        ref={canvasRef}
+                        className="block h-[420px] w-full"
+                        onPointerCancel={handlePointerLeave}
+                        onPointerLeave={handlePointerLeave}
+                        onPointerDown={handlePointerDown}
+                        onPointerMove={handlePointerMove}
+                        onPointerUp={handlePointerUp}
+                        onPointerEnter={() => isHost && tool === 'brush' && setShowBrushPreview(true)}
+                        style={{
+                           touchAction: "none",
+                           backgroundColor: "#ffffff",
+                           cursor: isHost ? "none" : "default"
+                        }}
+                     />
+                     {/* Custom brush cursor */}
+                     {isHost && tool === "brush" && showBrushPreview && (
+                        <div
+                           className="pointer-events-none absolute"
+                           style={{
+                              left: brushPos.x,
+                              top: brushPos.y,
+                              width: strokeWidth,
+                              height: strokeWidth,
+                              backgroundColor: strokeColor,
+                              borderRadius: "50%",
+                              transform: "translate(-50%, -50%)",
+                              boxShadow: "0 0 0 1px rgba(0,0,0,0.25)",
+                              opacity: 0.9,
+                              mixBlendMode: "multiply"
+                           }}
                         />
-                        <span className="w-6 text-center text-xs">{strokeWidth}</span>
-                     </div>}
-                     {isHost && (
-                        <div className="flex items-center gap-2">
-                           <button
-                              onClick={() => clearAll(canvasRef, ctxRef, setAllStrokes, socketRef)}
-                              className="border border-slate-400 bg-white px-2 py-1 text-xs hover:bg-red-500 hover:text-white"
-                           >
-                              Clear
-                           </button>
-                           <button
-                              onClick={() => {
-                                 undoLast({ isHost, socketRef })
-                              }}
-                              className="border border-slate-400 bg-white px-2 py-1 text-xs hover:bg-slate-500 hover:text-white"
-                           >
-                              Undo
-                           </button>
-                        </div>
                      )}
-                     <div className="ml-auto text-xs text-slate-600">
-                        Users: {connectedUsers.length}
-                     </div>
+                  </div>
+                  <div>
+                     <button
+                        onClick={() => {
+                           navigator.clipboard.writeText(`${window.location.href}?roomId=${roomId}`)
+                        }}
+                     >Copy Join URL</button>
                   </div>
 
-                  {/* drawing area */}
-                  <div className="flex flex-col items-stretch gap-2 p-3">
-                     <div className="relative border border-slate-400 bg-white shadow-inner">
-                        <canvas
-                           ref={canvasRef}
-                           className="block h-[420px] w-full"
-                           onPointerCancel={handlePointerLeave}
-                           onPointerLeave={handlePointerLeave}
-                           onPointerDown={handlePointerDown}
-                           onPointerMove={handlePointerMove}
-                           onPointerUp={handlePointerUp}
-                           style={{ touchAction: "none", backgroundColor: "#ffffff" }}
-                        />
+                  {/* Toolbar area */}
+
+                  {isHost && <div className="flex flex-wrap items-center gap-3 border-b bg-slate-200 px-3 py-2">
+                     <div className="flex items-center gap-1">
+                        <button
+                           onClick={() => setTool('brush')}
+                           className={`px-2 py-1 text-xs border rounded ${tool === 'brush' ? 'bg-sky-500 text-white border-sky-600' : 'bg-white border-slate-400 hover:bg-slate-100'}`}
+                           title="Brush tool (B)"
+                        >Brush</button>
+                        <button
+                           onClick={() => setTool('bucket')}
+                           className={`px-2 py-1 text-xs border rounded ${tool === 'bucket' ? 'bg-sky-500 text-white border-sky-600' : 'bg-white border-slate-400 hover:bg-slate-100'}`}
+                           title="Bucket fill (F)"
+                        >Fill</button>
                      </div>
 
                      {/* Color palette */}
-                     {isHost &&
-                        <div className="flex flex-col gap-1">
-                           <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">Colors</span>
-                           <div className="grid grid-cols-9 gap-1">
-                              {PALETTE.map(c => {
-                                 const active = c === strokeColor;
+                     <div className="flex flex-col gap-1">
+                        <div className="w-50 grid grid-cols-9">
+                           {PALETTE.map(c => {
+                              const active = c === strokeColor;
+                              return (
+                                 <button
+                                    key={c}
+                                    onClick={() => setStrokeColor(c)}
+                                    className={`h-6 w-6`}
+                                    style={{ backgroundColor: c }}
+                                    title={c}
+                                 />
+                              );
+                           })}
+                        </div>
+                     </div>
+
+                     {/* Brush size picker (replaces range slider) */}
+                     <div
+                        className="relative"
+                        ref={brushMenuRef}
+                     >
+                        <button
+                           type="button"
+                           onClick={() => setBrushMenuOpen(o => !o)}
+                           className="flex items-center justify-center border border-slate-400 bg-white rounded-full hover:ring-2 hover:ring-sky-400 transition"
+                           style={{
+                              width: Math.max(strokeWidth + 12, 28),
+                              height: Math.max(strokeWidth + 12, 28),
+                              position: "relative"
+                           }}
+                           title="Brush size"
+                        >
+                           <span
+                              style={{
+                                 width: strokeWidth,
+                                 height: strokeWidth,
+                                 backgroundColor: strokeColor,
+                                 borderRadius: "50%",
+                                 display: "block"
+                              }}
+                           />
+                        </button>
+
+                        {brushMenuOpen && (
+                           <div className="absolute left-1/2 -translate-x-1/2 mt-2 flex flex-col gap-2 rounded-md border border-slate-300 bg-white p-3 shadow z-20">
+                              {BRUSH_SIZES.map(sz => {
+                                 const active = sz === strokeWidth;
                                  return (
                                     <button
-                                       key={c}
-                                       onClick={() => setStrokeColor(c)}
-                                       className={`h-6 w-6 border ${active ? "border-black ring-2 ring-offset-1 ring-sky-500" : "border-slate-400"}`}
-                                       style={{ backgroundColor: c }}
-                                       title={c}
-                                    />
+                                       key={sz}
+                                       onClick={() => {
+                                          setStrokeWidth(sz);
+                                          setBrushMenuOpen(false);
+                                       }}
+                                       className={`flex items-center justify-center rounded-full transition ${active
+                                          ? "ring-2 ring-sky-500"
+                                          : "hover:bg-slate-100"
+                                          }`}
+                                       style={{
+                                          width: 34,
+                                          height: 34
+                                       }}
+                                       title={`${sz}px`}
+                                    >
+                                       <span
+                                          style={{
+                                             width: sz,
+                                             height: sz,
+                                             backgroundColor: strokeColor,
+                                             borderRadius: "50%",
+                                             display: "block",
+                                             boxShadow: "0 0 0 1px rgba(0,0,0,0.3)"
+                                          }}
+                                       />
+                                    </button>
                                  );
                               })}
                            </div>
-                        </div>}
-                  </div>
-               </div>
-            </div>
+                        )}
+                     </div>
 
-            {/* Chat side panel */}
-            <div className={`flex w-72 flex-col border bg-slate-100 shadow`}>
-               <div
-                  ref={listRef}
-                  className="flex-1 overflow-y-auto p-2 text-xs space-y-1"
-               >
-                  {messages.map((m, i) => {
-                     switch (m.type) {
-                        case 'chat_msg':
-                           return (
-                              <div key={i} className={`${i % 2 ? 'bg-gray-200' : ''} p-1`}>
-                                 <span className="font-semibold">{m.sender.Name}:</span>{" "}
-                                 <span className="break-words">
-                                    {m.message}
-                                 </span>
-                              </div>
-                           );
-                        case 'correct_guess':
-                           return (
-                              <div key={i} className={`p-1 text-green-600 font-semibold ${i % 2 ? 'bg-gray-200' : ''}`}>
-                                 {m.playerName} guessed the word!
-                              </div>
-                           );
-                        case 'close_guess':
-                           return (
-                              <div key={i} className={`p-1 ${m.editDistance > 0 ? 'text-lime-400' : 'text-black'} ${i % 2 ? 'bg-gray-200' : ''} `}>
-                                 <span className="font-semibold">{m.playerName}:</span>{" "}
-                                 <span className="break-words">
-                                    {m.message}
-                                 </span>
-                              </div>
-                           );
-                     }
-                  })}
-               </div>
-               <div className="border-t p-2">
-                  <form
-                     onSubmit={e => {
-                        e.preventDefault()
-                        submitChatMsg(input);
-                     }}
-                     className="flex gap-1"
-                  >
-                     <input
-                        placeholder="Type message..."
-                        className="h-8 text-xs flex-1 p-1"
-                        value={input}
-                        onChange={e => setInput(e.target.value)}
-                        onKeyDown={e => {
-                           if (e.key === "Enter" && !e.shiftKey) {
-                              e.preventDefault();
-                              submitChatMsg(input);
-                              e.stopPropagation();
-                           }
-                        }}
-                     />
-                  </form>
+                     <div className="flex items-center gap-2">
+                        <button
+                           onClick={() => clearAll(canvasRef, ctxRef, setAllStrokes, socketRef)}
+                           className="w-10 h-10 border border-slate-400 bg-white px-2 py-1 text-xs hover:bg-red-500 hover:text-white rounded"
+                           title="Clear canvas"
+                        >
+                           <img className="w-9" src="/trashcan.png" alt="Clear" />
+                        </button>
+                        <button
+                           onClick={undoLast}
+                           className="w-10 h-10 border  border-slate-400 bg-white px-2 py-1 text-xs hover:bg-slate-500 hover:text-white rounded"
+                           title="Undo last stroke"
+                        >
+                           <img className="w-9" src="/undo.png" alt="Undo" />
+                        </button>
+                     </div>
+                  </div>
+                  }
                </div>
             </div>
          </div>
+
+         {/* Chat side panel */}
+         <Chat
+            input={input}
+            setInput={setInput}
+            listRef={listRef}
+            messages={messages}
+            submit={submitChatMsg}
+         />
       </div>
    );
 }
