@@ -204,9 +204,9 @@ export const NormalToolbar = ({
    undoLast: () => void
 }) => {
    return (
-      <div className="flex flex-row items-center">
+      <div className="flex flex-row place-content-between">
          <Palette
-            strokeColor={strokeColor}
+            className="min-w-76"
             setStrokeColor={setStrokeColor}
          />
          <StrokeSelector

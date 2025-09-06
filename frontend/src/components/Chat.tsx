@@ -50,7 +50,7 @@ export const Chat = ({
    className?: string
 }) => {
    return (
-      <div className={cn(`flex w-72 flex-col border bg-white shadow`, className)}>
+      <div className={cn(`flex w-72 flex-col bg-white `, className)}>
          <div
             ref={listRef}
             className="flex-1 overflow-y-auto text-xs space-y-1"

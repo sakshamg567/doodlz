@@ -3,11 +3,9 @@ import { type WSMessage, type Stroke, type Point, type Player, type UiMessage } 
 import { sendPoint, drawPoint, pointerPos } from "./core"
 import { getOrCreateGuestId } from "./core/lib/guesId"
 import normalizeInbound from "./core/lib/normalizeUiMsg";
-import { Chat, ChatInput } from "./components/Chat";
-import { PlayerTab } from "./components/PlayerTab";
 import { useIsMobile } from "./hooks/useIsMobile";
-import { NormalToolbar } from "./components/ToolBar";
 import { MobileLayout } from "./components/MobileLayout";
+import { NormalLayout } from "./components/NormalLayout";
 
 const Game = ({ roomId }: { roomId: string }) => {
    const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -296,79 +294,27 @@ const Game = ({ roomId }: { roomId: string }) => {
                clearAll={clearAll}
             />
             : (
-
-               <div className="flex w-full max-w-5xl z-10 gap-1">
-                  {/* Players panel */}
-                  <PlayerTab
-                     connectedUsers={connectedUsers}
-                     guessedNames={guessedNames}
-                  />
-                  <div className="flex-1">
-                     {/* Title bar */}
-                     <div className="flex items-center justify-between bg-gradient-to-b from-[#0b65ad] to-[#0a4f84] px-3 py-1 text-sm font-semibold text-white shadow">
-                        <span>Doodlz - {roomId}</span>
-                     </div>
-
-                     {/* Content frame */}
-                     <div className="border border-[#0a4f84] bg-slate-100 shadow-[0_0_0_1px_rgba(0,0,0,0.3)]">
-                        {/* Player info */}
-
-
-
-                        {/* Toolbar row */}
-                        <div className="flex flex-wrap items-center gap-3 border-b bg-slate-200 px-3 py-2">
-                           <div className="ml-auto text-xs text-slate-600">
-                              Users: {connectedUsers.length}
-                           </div>
-                        </div>
-
-                        {/* drawing area */}
-                        <div className="flex flex-col items-stretch gap-2 p-3">
-                           <div className="relative border border-slate-400 bg-white shadow-inner">
-                              <canvas
-                                 ref={canvasRef}
-                                 className="block h-[420px] w-full"
-                                 onPointerCancel={handlePointerLeave}
-                                 onPointerLeave={handlePointerLeave}
-                                 onPointerDown={handlePointerDown}
-                                 onPointerMove={handlePointerMove}
-                                 onPointerUp={handlePointerUp}
-                                 style={{ touchAction: "none", backgroundColor: "#ffffff" }}
-                              />
-                           </div>
-
-                           {/* Color palette */}
-                           {isHost &&
-                              <NormalToolbar
-                                 strokeWidth={strokeWidth}
-                                 setStrokeWidth={setStrokeWidth}
-                                 strokeColor={strokeColor}
-                                 setStrokeColor={setStrokeColor}
-                                 clearAll={clearAll}
-                                 undoLast={undoLast}
-                              />
-                           }
-                        </div>
-                     </div>
-                  </div>
-
-                  {/* Chat side panel */}
-                  <div className="flex flex-col">
-                     <Chat
-                        className="h-11/12"
-                        listRef={listRef}
-                        messages={messages}
-                     />
-                     <ChatInput
-                        input={input}
-                        setInput={setInput}
-                        submitChatMsg={submitChatMsg}
-                     />
-                  </div>
-               </div>
-
+               <NormalLayout
+                  canvasRef={canvasRef}
+                  handlePointerDown={handlePointerDown}
+                  handlePointerLeave={handlePointerLeave}
+                  handlePointerMove={handlePointerMove}
+                  handlePointerUp={handlePointerUp}
+                  input={input}
+                  setInput={setInput}
+                  submitChatMsg={submitChatMsg}
+                  listRef={listRef}
+                  messages={messages}
+                  connectedUsers={connectedUsers}
+                  guessedNames={guessedNames}
+                  strokeColor={strokeColor}
+                  strokeWidth={strokeWidth}
+                  setStrokeColor={setStrokeColor}
+                  setStrokeWidth={setStrokeWidth}
+                  undoLast={undoLast}
+                  clearAll={clearAll}
+               />
             )}
-
       </div>
    );
 }

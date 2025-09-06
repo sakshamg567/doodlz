@@ -2,6 +2,7 @@ import type { Player, UiMessage } from "@/types/types"
 import { MobileToolBar } from "./ToolBar";
 import { PlayerTab } from "./PlayerTab";
 import { Chat, ChatInput } from "./Chat";
+import { Header } from "./Header";
 
 export const MobileLayout = ({
    canvasRef,
@@ -45,16 +46,12 @@ export const MobileLayout = ({
 
 
    return (
-      <div className="flex flex-col min-h-screen max-h-screen z-100 gap-1 w-full">
-         <div id="header" className="flex flex-row place-content-around bg-white min-h-14 flex-shrink-0">
-            <div>CLOCK</div>
-            <div>PLACEHOLDER</div>
-            <div>SETTINGS</div>
-         </div>
+      <div className="flex flex-col h-screen min-h-screen z-100 gap-1 w-full">
+         <Header />
          <div className="flex-shrink-0 overflow-hidden">
             <canvas
                ref={canvasRef}
-               className="w-full "
+               className="w-full max-h-96"
                style={{
                   aspectRatio: 4 / 3,
                   touchAction: "none",
