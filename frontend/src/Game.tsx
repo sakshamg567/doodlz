@@ -1,9 +1,13 @@
-import { useCallback, useEffect, useRef, useState, useMemo } from "react"
+import React, { useCallback, useEffect, useRef, useState, useMemo } from "react"
 import { type WSMessage, type Stroke, type Point, type Player, type UiMessage } from "./types/types"
-import { sendPoint, drawPoint, clearAll, clearCanvas, pointerPos } from "./core"
+import { sendPoint, drawPoint, pointerPos } from "./core"
 import { getOrCreateGuestId } from "./core/lib/guesId"
-import { PALETTE } from "./core/constants";
 import normalizeInbound from "./core/lib/normalizeUiMsg";
+import { Chat, ChatInput } from "./components/Chat";
+import { PlayerTab } from "./components/PlayerTab";
+import { useIsMobile } from "./hooks/useIsMobile";
+import { NormalToolbar } from "./components/ToolBar";
+import { MobileLayout } from "./components/MobileLayout";
 
 const Game = ({ roomId }: { roomId: string }) => {
    const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -17,12 +21,13 @@ const Game = ({ roomId }: { roomId: string }) => {
    const [currentStroke, setCurrentStroke] = useState<Point[]>([])
    const [messages, setMessages] = useState<UiMessage[]>([]);
    const [input, setInput] = useState("")
-   const [points, setPoints] = useState(0);
+   // const [points, setPoints] = useState(0);
 
    const [isHost, setIsHost] = useState<boolean>(false)
+   const isMobile = useIsMobile()
 
    const [strokeColor, setStrokeColor] = useState("#000000");
-   const [strokeWidth, setStrokeWidth] = useState(3);
+   const [strokeWidth, setStrokeWidth] = useState(6);
    // Track players who have guessed correctly this round (by name)
    const guessedNames = useMemo(
       () => new Set(
@@ -69,6 +74,23 @@ const Game = ({ roomId }: { roomId: string }) => {
    }, [strokeColor, strokeWidth]);
 
 
+   const clearCanvas = () => {
+      const canvas = canvasRef.current
+      if (!canvas || !ctxRef.current) return
+      ctxRef.current.clearRect(0, 0, canvas.width, canvas.height)
+   }
+
+   const clearAll = () => {
+      clearCanvas()
+      setAllStrokes([])
+
+      // Send clear message to other users
+      const msg: WSMessage = { type: "clear", data: {} }
+      socketRef.current?.send(JSON.stringify(msg))
+   }
+
+
+
    useEffect(() => {
       const el = listRef.current as unknown as HTMLDivElement | null;
       if (el) el.scrollTop = el.scrollHeight;
@@ -86,7 +108,7 @@ const Game = ({ roomId }: { roomId: string }) => {
             setAllStrokes(prev => [...prev, raw.data as Stroke]);
             return;
          case 'clear':
-            clearCanvas(canvasRef, ctxRef);
+            clearCanvas();
             setAllStrokes([]);
             return;
          case 'undo':
@@ -117,7 +139,7 @@ const Game = ({ roomId }: { roomId: string }) => {
    const replayAllStrokes = (strokes: Stroke[]) => {
       const ctx = ctxRef.current
       if (!ctx) return
-      clearCanvas(canvasRef, ctxRef)
+      clearCanvas()
       strokes.forEach(stroke => {
          ctx.beginPath();
          ctx.strokeStyle = stroke.strokeColor || "#000000";
@@ -136,7 +158,7 @@ const Game = ({ roomId }: { roomId: string }) => {
    const replayAllStrokesWithDelay = (strokes: Stroke[]) => {
       const ctx = ctxRef.current
       if (!ctx) return
-      clearCanvas(canvasRef, ctxRef)
+      clearCanvas()
 
       let s = 0, p = 0;
 
@@ -252,182 +274,101 @@ const Game = ({ roomId }: { roomId: string }) => {
          {/* Doodle PNG Overlay */}
          <div className="absolute opacity-25 inset-0 bg-[url('/doodlez.webp')] bg-no-repeat bg-center bg-cover pointer-events-none" />
 
+         {isMobile ?
+            <MobileLayout
+               canvasRef={canvasRef}
+               handlePointerDown={handlePointerDown}
+               handlePointerLeave={handlePointerLeave}
+               handlePointerMove={handlePointerMove}
+               handlePointerUp={handlePointerUp}
+               input={input}
+               setInput={setInput}
+               submitChatMsg={submitChatMsg}
+               listRef={listRef}
+               messages={messages}
+               connectedUsers={connectedUsers}
+               guessedNames={guessedNames}
+               strokeColor={strokeColor}
+               strokeWidth={strokeWidth}
+               setStrokeColor={setStrokeColor}
+               setStrokeWidth={setStrokeWidth}
+               undoLast={undoLast}
+               clearAll={clearAll}
+            />
+            : (
 
-         <div className="flex w-full max-w-5xl z-10 gap-1">
-            {/* Players panel */}
-            <div className="flex w-48 flex-col border bg-slate-100 shadow">
-               <div className="bg-gradient-to-b from-[#0b65ad] to-[#0a4f84] px-2 py-1 text-xs font-semibold text-white">
-                  Players ({connectedUsers.length})
-               </div>
-               <div className="flex-1 overflow-y-auto p-2 space-y-1">
-                  {connectedUsers.map(u => {
-                     const guessed = guessedNames.has(u.Name);
-                     return (
-                        <div
-                           key={u.ID}
-                           className={`flex items-center justify-between rounded px-2 py-1 text-xs border transition-colors
-                              ${guessed
-                                 ? 'bg-green-100 border-green-400 text-green-700 font-semibold'
-                                 : 'bg-white border-slate-300'
-                              }`}
-                           title={guessed ? 'Guessed correctly' : 'Has not guessed yet'}
-                        >
-                           <span className="truncate">{u.Name}</span>
-                        </div>
-                     );
-                  })}
-                  {!connectedUsers.length && (
-                     <div className="text-[10px] italic text-slate-500">No players</div>
-                  )}
-               </div>
-            </div>
-            <div className="flex-1">
-               {/* Title bar */}
-               <div className="flex items-center justify-between bg-gradient-to-b from-[#0b65ad] to-[#0a4f84] px-3 py-1 text-sm font-semibold text-white shadow">
-                  <span>Doodlz - {roomId}</span>
-               </div>
-
-               {/* Content frame */}
-               <div className="border border-[#0a4f84] bg-slate-100 shadow-[0_0_0_1px_rgba(0,0,0,0.3)]">
-                  {/* Player info */}
-
-
-
-                  {/* Toolbar row */}
-                  <div className="flex flex-wrap items-center gap-3 border-b bg-slate-200 px-3 py-2">
-                     {isHost && <div className="flex items-center gap-2">
-                        <label className="text-xs font-medium text-slate-700">Width</label>
-                        <input
-                           type="range"
-                           min={1}
-                           max={12}
-                           value={strokeWidth}
-                           onChange={e => setStrokeWidth(Number(e.target.value))}
-                           className="h-2 cursor-pointer"
-                        />
-                        <span className="w-6 text-center text-xs">{strokeWidth}</span>
-                     </div>}
-                     {isHost && (
-                        <div className="flex items-center gap-2">
-                           <button
-                              onClick={() => clearAll(canvasRef, ctxRef, setAllStrokes, socketRef)}
-                              className="border border-slate-400 bg-white px-2 py-1 text-xs hover:bg-red-500 hover:text-white"
-                           >
-                              Clear
-                           </button>
-                           <button
-                              onClick={() => {
-                                 undoLast({ isHost, socketRef })
-                              }}
-                              className="border border-slate-400 bg-white px-2 py-1 text-xs hover:bg-slate-500 hover:text-white"
-                           >
-                              Undo
-                           </button>
-                        </div>
-                     )}
-                     <div className="ml-auto text-xs text-slate-600">
-                        Users: {connectedUsers.length}
-                     </div>
-                  </div>
-
-                  {/* drawing area */}
-                  <div className="flex flex-col items-stretch gap-2 p-3">
-                     <div className="relative border border-slate-400 bg-white shadow-inner">
-                        <canvas
-                           ref={canvasRef}
-                           className="block h-[420px] w-full"
-                           onPointerCancel={handlePointerLeave}
-                           onPointerLeave={handlePointerLeave}
-                           onPointerDown={handlePointerDown}
-                           onPointerMove={handlePointerMove}
-                           onPointerUp={handlePointerUp}
-                           style={{ touchAction: "none", backgroundColor: "#ffffff" }}
-                        />
+               <div className="flex w-full max-w-5xl z-10 gap-1">
+                  {/* Players panel */}
+                  <PlayerTab
+                     connectedUsers={connectedUsers}
+                     guessedNames={guessedNames}
+                  />
+                  <div className="flex-1">
+                     {/* Title bar */}
+                     <div className="flex items-center justify-between bg-gradient-to-b from-[#0b65ad] to-[#0a4f84] px-3 py-1 text-sm font-semibold text-white shadow">
+                        <span>Doodlz - {roomId}</span>
                      </div>
 
-                     {/* Color palette */}
-                     {isHost &&
-                        <div className="flex flex-col gap-1">
-                           <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">Colors</span>
-                           <div className="grid grid-cols-9 gap-1">
-                              {PALETTE.map(c => {
-                                 const active = c === strokeColor;
-                                 return (
-                                    <button
-                                       key={c}
-                                       onClick={() => setStrokeColor(c)}
-                                       className={`h-6 w-6 border ${active ? "border-black ring-2 ring-offset-1 ring-sky-500" : "border-slate-400"}`}
-                                       style={{ backgroundColor: c }}
-                                       title={c}
-                                    />
-                                 );
-                              })}
+                     {/* Content frame */}
+                     <div className="border border-[#0a4f84] bg-slate-100 shadow-[0_0_0_1px_rgba(0,0,0,0.3)]">
+                        {/* Player info */}
+
+
+
+                        {/* Toolbar row */}
+                        <div className="flex flex-wrap items-center gap-3 border-b bg-slate-200 px-3 py-2">
+                           <div className="ml-auto text-xs text-slate-600">
+                              Users: {connectedUsers.length}
                            </div>
-                        </div>}
+                        </div>
+
+                        {/* drawing area */}
+                        <div className="flex flex-col items-stretch gap-2 p-3">
+                           <div className="relative border border-slate-400 bg-white shadow-inner">
+                              <canvas
+                                 ref={canvasRef}
+                                 className="block h-[420px] w-full"
+                                 onPointerCancel={handlePointerLeave}
+                                 onPointerLeave={handlePointerLeave}
+                                 onPointerDown={handlePointerDown}
+                                 onPointerMove={handlePointerMove}
+                                 onPointerUp={handlePointerUp}
+                                 style={{ touchAction: "none", backgroundColor: "#ffffff" }}
+                              />
+                           </div>
+
+                           {/* Color palette */}
+                           {isHost &&
+                              <NormalToolbar
+                                 strokeWidth={strokeWidth}
+                                 setStrokeWidth={setStrokeWidth}
+                                 strokeColor={strokeColor}
+                                 setStrokeColor={setStrokeColor}
+                                 clearAll={clearAll}
+                                 undoLast={undoLast}
+                              />
+                           }
+                        </div>
+                     </div>
+                  </div>
+
+                  {/* Chat side panel */}
+                  <div className="flex flex-col">
+                     <Chat
+                        className="h-11/12"
+                        listRef={listRef}
+                        messages={messages}
+                     />
+                     <ChatInput
+                        input={input}
+                        setInput={setInput}
+                        submitChatMsg={submitChatMsg}
+                     />
                   </div>
                </div>
-            </div>
 
-            {/* Chat side panel */}
-            <div className={`flex w-72 flex-col border bg-slate-100 shadow`}>
-               <div
-                  ref={listRef}
-                  className="flex-1 overflow-y-auto p-2 text-xs space-y-1"
-               >
-                  {messages.map((m, i) => {
-                     switch (m.type) {
-                        case 'chat_msg':
-                           return (
-                              <div key={i} className={`${i % 2 ? 'bg-gray-200' : ''} p-1`}>
-                                 <span className="font-semibold">{m.sender.Name}:</span>{" "}
-                                 <span className="break-words">
-                                    {m.message}
-                                 </span>
-                              </div>
-                           );
-                        case 'correct_guess':
-                           return (
-                              <div key={i} className={`p-1 text-green-600 font-semibold ${i % 2 ? 'bg-gray-200' : ''}`}>
-                                 {m.playerName} guessed the word!
-                              </div>
-                           );
-                        case 'close_guess':
-                           return (
-                              <div key={i} className={`p-1 ${m.editDistance > 0 ? 'text-lime-400' : 'text-black'} ${i % 2 ? 'bg-gray-200' : ''} `}>
-                                 <span className="font-semibold">{m.playerName}:</span>{" "}
-                                 <span className="break-words">
-                                    {m.message}
-                                 </span>
-                              </div>
-                           );
-                     }
-                  })}
-               </div>
-               <div className="border-t p-2">
-                  <form
-                     onSubmit={e => {
-                        e.preventDefault()
-                        submitChatMsg(input);
-                     }}
-                     className="flex gap-1"
-                  >
-                     <input
-                        placeholder="Type message..."
-                        className="h-8 text-xs flex-1 p-1"
-                        value={input}
-                        onChange={e => setInput(e.target.value)}
-                        onKeyDown={e => {
-                           if (e.key === "Enter" && !e.shiftKey) {
-                              e.preventDefault();
-                              submitChatMsg(input);
-                              e.stopPropagation();
-                           }
-                        }}
-                     />
-                  </form>
-               </div>
-            </div>
-         </div>
+            )}
+
       </div>
    );
 }

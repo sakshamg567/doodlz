@@ -20,10 +20,12 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-sketch-canvas": "^6.2.0",
+    "roughjs": "^4.6.6",
     "tailwind-merge": "^3.3.1",
     "tailwindcss": "^4.1.11",
     "uuid": "^11.1.0",
-    "uuidv4": "^6.2.13"
+    "uuidv4": "^6.2.13",
+    "zustand": "^5.0.8"
   },
   "devDependencies": {
     "@eslint/js": "^9.30.1",

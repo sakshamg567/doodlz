@@ -62,3 +62,5 @@ export type Player = {
    Name: string;
    Points: number
 }
+
+export type Color = string
